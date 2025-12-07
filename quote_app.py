@@ -712,6 +712,9 @@ with tab_admin:
                                 file_name="metrics_summary.csv",
                                 mime="text/csv",
                             )
+
+                            # Force a rerun so other tabs see the new master/models
+                            st.experimental_rerun()
                         else:
                             st.warning(
                                 "No models were trained (not enough data for any operation). "
