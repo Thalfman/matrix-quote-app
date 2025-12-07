@@ -714,7 +714,7 @@ with tab_admin:
                             )
 
                             # Force a rerun so other tabs see the new master/models
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.warning(
                                 "No models were trained (not enough data for any operation). "
