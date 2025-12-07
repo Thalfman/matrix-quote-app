@@ -73,7 +73,7 @@ def _load_metrics():
 
 def _reset_app_state():
     """Delete master dataset, upload log, and model artifacts; reset models_ready."""
-    # Remove master dataset and uploads log if present
+    # Remove master dataset, upload log, and metrics file if present
     for path in [MASTER_DATA_PATH, UPLOADS_LOG_PATH, METRICS_PATH]:
         if os.path.exists(path):
             os.remove(path)
@@ -86,8 +86,10 @@ def _reset_app_state():
                 try:
                     os.remove(os.path.join(models_dir, fname))
                 except OSError:
+                    # If a file can't be removed, just skip it
                     pass
 
+    # Mark models as not ready so Single/Batch tabs show the correct warning
     st.session_state["models_ready"] = False
 
 
@@ -709,3 +711,21 @@ with tab_admin:
                                 data=csv_bytes,
                                 file_name="metrics_summary.csv",
                                 mime="text/csv",
+                            )
+                        else:
+                            st.warning(
+                                "No models were trained (not enough data for any operation). "
+                                "Check that actual-hours columns have non-zero values."
+                            )
+    else:
+        st.info("Upload your project dataset (Excel) to enable training.")
+
+    st.markdown("---")
+    st.subheader("Reset app state")
+
+    if st.button("Reset master dataset and models"):
+        _reset_app_state()
+        st.success(
+            "Master dataset, upload log, and model artifacts have been cleared. "
+            "The app is now in a blank state."
+        )
