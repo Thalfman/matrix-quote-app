@@ -732,3 +732,4 @@ with tab_admin:
             "Master dataset, upload log, and model artifacts have been cleared. "
             "The app is now in a blank state."
         )
+        st.rerun()
