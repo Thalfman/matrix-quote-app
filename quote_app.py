@@ -71,6 +71,26 @@ def _load_metrics():
     return None
 
 
+def _reset_app_state():
+    """Delete master dataset, upload log, and model artifacts; reset models_ready."""
+    # Remove master dataset and uploads log if present
+    for path in [MASTER_DATA_PATH, UPLOADS_LOG_PATH, METRICS_PATH]:
+        if os.path.exists(path):
+            os.remove(path)
+
+    # Remove joblib model files in models/
+    models_dir = "models"
+    if os.path.exists(models_dir) and os.path.isdir(models_dir):
+        for fname in os.listdir(models_dir):
+            if fname.endswith(".joblib"):
+                try:
+                    os.remove(os.path.join(models_dir, fname))
+                except OSError:
+                    pass
+
+    st.session_state["models_ready"] = False
+
+
 # Overview tab: high-level status
 with tab_overview:
     st.header("Overview")
@@ -689,11 +709,3 @@ with tab_admin:
                                 data=csv_bytes,
                                 file_name="metrics_summary.csv",
                                 mime="text/csv",
-                            )
-                        else:
-                            st.warning(
-                                "No models were trained (not enough data for any operation). "
-                                "Check that actual-hours columns have non-zero values."
-                            )
-    else:
-        st.info("Upload your project dataset (Excel) to enable training.")
