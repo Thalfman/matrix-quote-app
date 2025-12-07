@@ -495,21 +495,32 @@ with tab_single:
 
 # Batch Quotes tab
 with tab_batch:
-    st.header("Batch estimation via CSV")
+    st.header("Batch estimation via CSV or Excel")
 
     if not st.session_state["models_ready"]:
         st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
     else:
         st.markdown(
-            "Your CSV must include at least these columns: "
+            "Your file must include at least these columns: "
             f"`{', '.join(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)}`"
         )
 
         uploaded = st.file_uploader(
-            "Upload quote CSV", type=["csv"], key="batch_uploader"
+            "Upload quote file (CSV or Excel)",
+            type=["csv", "xlsx", "xls"],
+            key="batch_uploader",
         )
         if uploaded is not None:
-            df_in = pd.read_csv(uploaded)
+            name = uploaded.name.lower()
+            if name.endswith(".csv"):
+                df_in = pd.read_csv(uploaded)
+            else:
+                xls = pd.ExcelFile(uploaded)
+                sheet_name = st.selectbox(
+                    "Select sheet for quote inputs", xls.sheet_names, key="batch_sheet"
+                )
+                df_in = pd.read_excel(xls, sheet_name=sheet_name)
+
             st.subheader("Input preview")
             st.dataframe(df_in.head())
 
@@ -538,12 +549,12 @@ with tab_admin:
     st.header("Admin: Upload dataset and train models")
 
     st.markdown(
-        "Upload the latest project_hours_dataset.xlsx export. "
+        "Upload the latest project_hours_dataset Excel export. "
         "The app will merge it into a master dataset (dedup by project_id) and retrain models."
     )
 
     uploaded_file = st.file_uploader(
-        "Upload project_hours_dataset.xlsx",
+        "Upload project dataset (Excel)",
         type=["xlsx", "xls"],
         key="training_uploader",
     )
@@ -685,4 +696,4 @@ with tab_admin:
                                 "Check that actual-hours columns have non-zero values."
                             )
     else:
-        st.info("Upload your project_hours_dataset.xlsx to enable training.")
+        st.info("Upload your project dataset (Excel) to enable training.")
