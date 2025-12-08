@@ -34,6 +34,17 @@ st.title("Matrix Quote App")
 if "models_ready" not in st.session_state:
     st.session_state["models_ready"] = False
 
+# If this is a new session but models/metrics already exist on disk,
+# mark models as ready so Single/Batch are usable without retraining.
+if not st.session_state["models_ready"]:
+    if os.path.exists(METRICS_PATH):
+        try:
+            _metrics = pd.read_csv(METRICS_PATH)
+            if not _metrics.empty:
+                st.session_state["models_ready"] = True
+        except Exception:
+            pass
+
 tabs = st.tabs(
     [
         "Overview",
