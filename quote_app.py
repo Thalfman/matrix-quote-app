@@ -213,8 +213,13 @@ with tab_data:
             col_charts1, col_charts2 = st.columns(2)
 
             with col_charts1:
-                st.write(f"Histogram of {op_choice}")
-                st.bar_chart(df_filtered[op_choice].dropna())
+                st.write(f"Hours by project for {op_choice}")
+                if "project_id" in df_filtered.columns:
+                    proj_df = df_filtered[["project_id", op_choice]].dropna()
+                    proj_df = proj_df.set_index("project_id")
+                    st.bar_chart(proj_df[op_choice])
+                else:
+                    st.info("No project_id column found to label projects.")
 
             with col_charts2:
                 if "robot_count" in df_filtered.columns:
@@ -224,8 +229,11 @@ with tab_data:
                         columns={"robot_count": "robot_count", op_choice: "hours"}
                     )
                     st.scatter_chart(scatter_df, x="robot_count", y="hours")
+                else:
+                    st.info("No robot_count column found for scatter plot.")
         else:
             st.info("No operation hours columns found in master dataset.")
+
 
 
 # Model Performance tab: show per-op metrics
@@ -389,11 +397,11 @@ with tab_single:
         )
         system_category = st.selectbox(
             "System category",
-            ["End of Line Automation", "Machine Tending", "Other"],
+            ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
         )
         automation_level = st.selectbox(
             "Automation level",
-            ["Semi-Automatic", "Robotic"],
+            ["Semi-Automatic", "Robotic", "Hard Automation"],
         )
         plc_family = st.text_input("PLC family", "AB Compact Logix")
         hmi_family = st.text_input("HMI family", "AB PanelView Plus")
@@ -453,11 +461,14 @@ with tab_single:
         physical_scale_index = st.number_input(
             "Physical scale index (optional)", min_value=0.0
         )
-        log_quoted_materials_cost = st.number_input(
-            "log(1 + quoted materials cost)", min_value=0.0
+        estimated_materials_cost = st.number_input(
+        "Estimated materials cost", min_value=0.0
         )
 
         if st.button("Estimate hours"):
+
+            log_cost = float(np.log1p(estimated_materials_cost))
+
             q = QuoteInput(
                 industry_segment=industry_segment,
                 system_category=system_category,
@@ -497,7 +508,7 @@ with tab_single:
                 mech_complexity_index=mech_complexity_index,
                 controls_complexity_index=controls_complexity_index,
                 physical_scale_index=physical_scale_index,
-                log_quoted_materials_cost=log_quoted_materials_cost,
+                log_quoted_materials_cost=log_cost,
             )
             pred = predict_quote(q)
 
