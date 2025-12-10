@@ -5,10 +5,21 @@ from typing import Dict
 
 import pandas as pd
 
-from core.config import TARGETS, QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
+from core.config import (
+    TARGETS,
+    QUOTE_NUM_FEATURES,
+    QUOTE_CAT_FEATURES,
+    SALES_BUCKETS,
+    SALES_BUCKET_MAP,
+)
 from core.features import prepare_quote_features
 from core.models import load_model, predict_with_interval
-from core.schemas import QuoteInput, QuotePrediction, OpPrediction
+from core.schemas import (
+    QuoteInput,
+    QuotePrediction,
+    OpPrediction,
+    SalesBucketPrediction,
+)
 
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
@@ -49,6 +60,9 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
     df = _quote_to_df(q)
 
     ops: Dict[str, OpPrediction] = {}
+    bucket_totals = {
+        bucket: {"p10": 0.0, "p50": 0.0, "p90": 0.0} for bucket in SALES_BUCKETS
+    }
     total_p50 = total_p10 = total_p90 = 0.0
 
     for target in TARGETS:
@@ -71,15 +85,38 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
             confidence=conf_label,
         )
 
+        bucket = SALES_BUCKET_MAP.get(op_name)
+        if bucket in bucket_totals:
+            bucket_totals[bucket]["p10"] += p10
+            bucket_totals[bucket]["p50"] += p50
+            bucket_totals[bucket]["p90"] += p90
+
         total_p50 += p50
         total_p10 += p10
         total_p90 += p90
+
+    sales_buckets: Dict[str, SalesBucketPrediction] = {}
+    for bucket in SALES_BUCKETS:
+        totals = bucket_totals.get(bucket, {"p10": 0.0, "p50": 0.0, "p90": 0.0})
+        p10 = float(totals["p10"])
+        p50 = float(totals["p50"])
+        p90 = float(totals["p90"])
+        rel_width, conf_label = _compute_confidence(p10, p50, p90)
+
+        sales_buckets[bucket] = SalesBucketPrediction(
+            p10=p10,
+            p50=p50,
+            p90=p90,
+            rel_width=rel_width,
+            confidence=conf_label,
+        )
 
     return QuotePrediction(
         ops=ops,
         total_p50=float(total_p50),
         total_p10=float(total_p10),
         total_p90=float(total_p90),
+        sales_buckets=sales_buckets,
     )
 
 
