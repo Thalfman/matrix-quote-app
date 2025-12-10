@@ -11,6 +11,7 @@
 import os
 import math
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 from core.config import (
@@ -513,6 +514,140 @@ with tab_single:
             )
             pred = predict_quote(q)
 
+            sales_rows = []
+            for bucket in SALES_BUCKETS:
+                bucket_pred = pred.sales_buckets.get(bucket)
+                if bucket_pred is None:
+                    continue
+                sales_rows.append(
+                    {
+                        "Sales bucket": bucket,
+                        "p10_hours": bucket_pred.p10,
+                        "p50_hours": bucket_pred.p50,
+                        "p90_hours": bucket_pred.p90,
+                        "confidence": bucket_pred.confidence,
+                    }
+                )
+
+            has_quoted_hours = False
+            quoted_hours_by_bucket = st.session_state.get("quoted_hours_by_bucket")
+            if isinstance(quoted_hours_by_bucket, dict) and quoted_hours_by_bucket:
+                has_quoted_hours = True
+
+            sales_summary_rows = []
+
+            for row in sales_rows:
+                role = row["Sales bucket"]
+                p10 = row["p10_hours"]
+                p50 = row["p50_hours"]
+                p90 = row["p90_hours"]
+                confidence = row["confidence"]
+
+                summary_row = {
+                    "Role": role,
+                    "Recommended hours (P50)": p50,
+                    "Range (P10–P90)": f"{p10:.1f}–{p90:.1f}",
+                    "Confidence": confidence.title(),
+                }
+
+                if has_quoted_hours:
+                    quoted_val = quoted_hours_by_bucket.get(role)
+                    if quoted_val is not None:
+                        delta = quoted_val - p50
+                        threshold = max(0.1 * abs(p50), 5)
+                        if abs(delta) <= threshold:
+                            delta_status = "Close"
+                        elif delta > 0:
+                            delta_status = "Over model"
+                        else:
+                            delta_status = "Under model"
+
+                        summary_row.update(
+                            {
+                                "Quoted hours": quoted_val,
+                                "Delta (quoted - model)": delta,
+                                "Status": delta_status,
+                            }
+                        )
+                sales_summary_rows.append(summary_row)
+
+            st.subheader("Project summary")
+            total_model_hours = pred.total_p50
+            project_cols = ["Model total (P50)"]
+            project_values = [f"{total_model_hours:.1f} h"]
+            project_status = None
+
+            if has_quoted_hours:
+                total_quoted = sum(
+                    v for v in quoted_hours_by_bucket.values() if isinstance(v, (int, float))
+                )
+                total_delta = total_quoted - total_model_hours
+                project_cols.extend(["Quoted total", "Delta (quoted - model)"])
+                project_values.extend([f"{total_quoted:.1f} h", f"{total_delta:.1f} h"])
+
+                threshold_total = max(0.1 * abs(total_model_hours), 10)
+                if abs(total_delta) <= threshold_total:
+                    project_status = "Overall close to model"
+                elif total_delta > 0:
+                    project_status = "Quoted hours above model"
+                else:
+                    project_status = "Quoted hours below model"
+
+            cols = st.columns(len(project_cols))
+            for col, label, val in zip(cols, project_cols, project_values):
+                col.metric(label, val)
+
+            if project_status:
+                st.caption(project_status)
+
+            st.subheader("Sales-level summary")
+            if sales_summary_rows:
+                df_sales_summary = pd.DataFrame(sales_summary_rows)
+                df_sales_summary_sorted = df_sales_summary.sort_values("Role")
+
+                if has_quoted_hours:
+                    total_row = {
+                        "Role": "TOTAL",
+                        "Recommended hours (P50)": df_sales_summary["Recommended hours (P50)"].sum(),
+                        "Range (P10–P90)": "-",
+                        "Confidence": "-",
+                        "Quoted hours": df_sales_summary["Quoted hours"].sum(),
+                        "Delta (quoted - model)": df_sales_summary["Delta (quoted - model)"].sum(),
+                        "Status": "-",
+                    }
+                    df_sales_summary_sorted = pd.concat(
+                        [df_sales_summary_sorted, pd.DataFrame([total_row])], ignore_index=True
+                    )
+
+                st.dataframe(df_sales_summary_sorted)
+
+                if has_quoted_hours:
+                    df_chart = df_sales_summary_sorted[
+                        df_sales_summary_sorted["Role"] != "TOTAL"
+                    ][["Role", "Recommended hours (P50)", "Quoted hours"]]
+                    if not df_chart.empty:
+                        chart_data = df_chart.melt(
+                            id_vars="Role",
+                            value_vars=["Recommended hours (P50)", "Quoted hours"],
+                            var_name="Source",
+                            value_name="Hours",
+                        )
+                        chart = (
+                            alt.Chart(chart_data)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("Role:N", sort="-y"),
+                                y=alt.Y("Hours:Q"),
+                                color="Source:N",
+                                column=alt.Column("Source:N", header=alt.Header(title=None)),
+                                tooltip=["Role", "Source", "Hours"],
+                            )
+                            .resolve_scale(y="shared")
+                        )
+                        st.altair_chart(chart, use_container_width=True)
+            else:
+                st.info("No Sales-level rollup available for this quote.")
+
             rows = []
             for op, op_pred in pred.ops.items():
                 rows.append(
@@ -529,21 +664,6 @@ with tab_single:
             df_out = pd.DataFrame(rows)
             st.subheader("Per-operation predictions")
             st.dataframe(df_out)
-
-            sales_rows = []
-            for bucket in SALES_BUCKETS:
-                bucket_pred = pred.sales_buckets.get(bucket)
-                if bucket_pred is None:
-                    continue
-                sales_rows.append(
-                    {
-                        "Sales bucket": bucket,
-                        "p10_hours": bucket_pred.p10,
-                        "p50_hours": bucket_pred.p50,
-                        "p90_hours": bucket_pred.p90,
-                        "confidence": bucket_pred.confidence,
-                    }
-                )
 
             st.subheader("Sales-level rollup (by bucket)")
             st.caption(
