@@ -10,6 +10,8 @@
 
 import os
 
+import math
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -18,6 +20,7 @@ from core.config import (
     QUOTE_CAT_FEATURES,
     TARGETS,
     REQUIRED_TRAINING_COLS,
+    SALES_BUCKETS,
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
@@ -467,7 +470,7 @@ with tab_single:
 
         if st.button("Estimate hours"):
 
-            log_cost = float(np.log1p(estimated_materials_cost))
+            log_cost = float(math.log1p(estimated_materials_cost))
 
             q = QuoteInput(
                 industry_segment=industry_segment,
@@ -528,6 +531,32 @@ with tab_single:
             df_out = pd.DataFrame(rows)
             st.subheader("Per-operation predictions")
             st.dataframe(df_out)
+
+            sales_rows = []
+            for bucket in SALES_BUCKETS:
+                bucket_pred = pred.sales_buckets.get(bucket)
+                if bucket_pred is None:
+                    continue
+                sales_rows.append(
+                    {
+                        "Sales bucket": bucket,
+                        "p10_hours": bucket_pred.p10,
+                        "p50_hours": bucket_pred.p50,
+                        "p90_hours": bucket_pred.p90,
+                        "confidence": bucket_pred.confidence,
+                    }
+                )
+
+            st.subheader("Sales-level rollup (by bucket)")
+            st.caption(
+                "Higher-level summary for Sales, rolled up from the detailed "
+                "operation predictions."
+            )
+            if sales_rows:
+                df_sales = pd.DataFrame(sales_rows)
+                st.dataframe(df_sales)
+            else:
+                st.info("No Sales-level rollup available for this quote.")
 
             st.subheader("Project totals")
             st.write(
