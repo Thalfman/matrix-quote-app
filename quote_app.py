@@ -9,7 +9,7 @@
 # - Admin: Upload & Train
 
 import os
-
+import math
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -469,7 +469,7 @@ with tab_single:
 
         if st.button("Estimate hours"):
 
-            log_cost = float(np.log1p(estimated_materials_cost))
+            log_cost = float(math.log1p(estimated_materials_cost))
 
             q = QuoteInput(
                 industry_segment=industry_segment,
