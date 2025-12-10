@@ -10,7 +10,6 @@
 
 import os
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -19,7 +18,6 @@ from core.config import (
     QUOTE_CAT_FEATURES,
     TARGETS,
     REQUIRED_TRAINING_COLS,
-    SALES_BUCKET_ORDER,
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
@@ -530,33 +528,6 @@ with tab_single:
             df_out = pd.DataFrame(rows)
             st.subheader("Per-operation predictions")
             st.dataframe(df_out)
-
-            st.subheader("Sales-level rollup (bucketed predictions)")
-            st.caption(
-                "Sales-friendly view: operation predictions rolled into broader roles."
-            )
-
-            bucket_rows = []
-            for bucket in SALES_BUCKET_ORDER:
-                bucket_pred = pred.sales_buckets.get(bucket)
-                if bucket_pred is None:
-                    continue
-
-                bucket_rows.append(
-                    {
-                        "sales_bucket": bucket,
-                        "p10_hours": bucket_pred.p10,
-                        "p50_hours": bucket_pred.p50,
-                        "p90_hours": bucket_pred.p90,
-                        "confidence": bucket_pred.confidence,
-                    }
-                )
-
-            if bucket_rows:
-                df_buckets = pd.DataFrame(bucket_rows)
-                st.dataframe(df_buckets)
-            else:
-                st.info("No Sales bucket predictions available for this quote.")
 
             st.subheader("Project totals")
             st.write(
