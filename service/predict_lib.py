@@ -5,21 +5,10 @@ from typing import Dict
 
 import pandas as pd
 
-from core.config import (
-    TARGETS,
-    QUOTE_NUM_FEATURES,
-    QUOTE_CAT_FEATURES,
-    SALES_BUCKET_MAP,
-    SALES_BUCKET_ORDER,
-)
+from core.config import TARGETS, QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
 from core.features import prepare_quote_features
 from core.models import load_model, predict_with_interval
-from core.schemas import (
-    QuoteInput,
-    QuotePrediction,
-    OpPrediction,
-    SalesBucketPrediction,
-)
+from core.schemas import QuoteInput, QuotePrediction, OpPrediction
 
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
@@ -60,7 +49,6 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
     df = _quote_to_df(q)
 
     ops: Dict[str, OpPrediction] = {}
-    bucket_preds: Dict[str, SalesBucketPrediction] = {}
     total_p50 = total_p10 = total_p90 = 0.0
 
     for target in TARGETS:
@@ -87,32 +75,8 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
         total_p10 += p10
         total_p90 += p90
 
-    # Aggregate by Sales bucket using the configured mapping
-    bucket_to_ops: Dict[str, list[str]] = {}
-    for op_name, bucket in SALES_BUCKET_MAP.items():
-        bucket_to_ops.setdefault(bucket, []).append(op_name)
-
-    for bucket in SALES_BUCKET_ORDER:
-        op_list = bucket_to_ops.get(bucket, [])
-        if not op_list:
-            continue
-
-        p10_sum = sum(ops[op].p10 for op in op_list if op in ops)
-        p50_sum = sum(ops[op].p50 for op in op_list if op in ops)
-        p90_sum = sum(ops[op].p90 for op in op_list if op in ops)
-        rel_width, conf_label = _compute_confidence(p10_sum, p50_sum, p90_sum)
-
-        bucket_preds[bucket] = SalesBucketPrediction(
-            p10=p10_sum,
-            p50=p50_sum,
-            p90=p90_sum,
-            rel_width=rel_width,
-            confidence=conf_label,
-        )
-
     return QuotePrediction(
         ops=ops,
-        sales_buckets=bucket_preds,
         total_p50=float(total_p50),
         total_p10=float(total_p10),
         total_p90=float(total_p90),

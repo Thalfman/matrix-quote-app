@@ -17,37 +17,6 @@ TARGETS = [
     "pm200_actual_hours",
 ]
 
-# Mapping from operation code (without _actual_hours) to Sales-level buckets.
-# Update this dictionary if rollups change; all operations should map to exactly
-# one bucket.
-SALES_BUCKET_MAP = {
-    "me10": "ME",
-    "me15": "ME",
-    "me230": "ME",
-    "ee20": "EE",
-    "rb30": "Robot",
-    "cp50": "Controls",
-    "bld100": "Build",
-    "shp150": "Build",
-    "inst160": "Install",
-    "trv180": "Travel",
-    "doc190": "Docs",
-    "pm200": "PM",
-}
-
-# Default order for displaying Sales bucket summaries.
-SALES_BUCKET_ORDER = [
-    "ME",
-    "EE",
-    "PM",
-    "Docs",
-    "Build",
-    "Robot",
-    "Controls",
-    "Install",
-    "Travel",
-]
-
 # Numeric features that should be available (or reasonably estimable) at quote time.
 # These are the only numeric inputs the quote-time models are allowed to use.
 QUOTE_NUM_FEATURES = [

@@ -64,21 +64,10 @@ class OpPrediction(BaseModel):
     confidence: str = Field(..., description="'high' | 'medium' | 'low'")
 
 
-class SalesBucketPrediction(BaseModel):
-    """Aggregated prediction output for a Sales bucket/role."""
-
-    p50: float = Field(..., description="Median predicted hours")
-    p10: float = Field(..., description="Lower bound (10th percentile)")
-    p90: float = Field(..., description="Upper bound (90th percentile)")
-    rel_width: float = Field(..., description="(p90 - p10) / |p50|")
-    confidence: str = Field(..., description="'high' | 'medium' | 'low'")
-
-
 class QuotePrediction(BaseModel):
     """All operation predictions plus project totals."""
 
     ops: Dict[str, OpPrediction]
-    sales_buckets: Dict[str, SalesBucketPrediction]
     total_p50: float
     total_p10: float
     total_p90: float
