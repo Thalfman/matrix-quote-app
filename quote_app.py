@@ -571,7 +571,6 @@ with tab_single:
                         )
                 sales_summary_rows.append(summary_row)
 
-            st.subheader("Project summary")
             total_model_hours = pred.total_p50
             project_cols = ["Model total (P50)"]
             project_values = [f"{total_model_hours:.1f} h"]
@@ -593,17 +592,13 @@ with tab_single:
                 else:
                     project_status = "Quoted hours below model"
 
-            cols = st.columns(len(project_cols))
-            for col, label, val in zip(cols, project_cols, project_values):
-                col.metric(label, val)
-
-            if project_status:
-                st.caption(project_status)
-
-            st.subheader("Sales-level summary")
-            if sales_summary_rows:
+            sales_summary_rows_exist = bool(sales_summary_rows)
+            df_sales_summary_sorted = None
+            if sales_summary_rows_exist:
                 df_sales_summary = pd.DataFrame(sales_summary_rows)
-                df_sales_summary_sorted = df_sales_summary.sort_values("Role")
+                df_sales_summary_sorted = df_sales_summary.sort_values(
+                    "Recommended hours (P50)", ascending=False
+                )
 
                 if has_quoted_hours:
                     total_row = {
@@ -619,35 +614,6 @@ with tab_single:
                         [df_sales_summary_sorted, pd.DataFrame([total_row])], ignore_index=True
                     )
 
-                st.dataframe(df_sales_summary_sorted)
-
-                if has_quoted_hours:
-                    df_chart = df_sales_summary_sorted[
-                        df_sales_summary_sorted["Role"] != "TOTAL"
-                    ][["Role", "Recommended hours (P50)", "Quoted hours"]]
-                    if not df_chart.empty:
-                        chart_data = df_chart.melt(
-                            id_vars="Role",
-                            value_vars=["Recommended hours (P50)", "Quoted hours"],
-                            var_name="Source",
-                            value_name="Hours",
-                        )
-                        chart = (
-                            alt.Chart(chart_data)
-                            .mark_bar()
-                            .encode(
-                                x=alt.X("Role:N", sort="-y"),
-                                y=alt.Y("Hours:Q"),
-                                color="Source:N",
-                                column=alt.Column("Source:N", header=alt.Header(title=None)),
-                                tooltip=["Role", "Source", "Hours"],
-                            )
-                            .resolve_scale(y="shared")
-                        )
-                        st.altair_chart(chart, use_container_width=True)
-            else:
-                st.info("No Sales-level rollup available for this quote.")
-
             rows = []
             for op, op_pred in pred.ops.items():
                 rows.append(
@@ -662,26 +628,64 @@ with tab_single:
                     }
                 )
             df_out = pd.DataFrame(rows)
-            st.subheader("Per-operation predictions")
-            st.dataframe(df_out)
 
-            st.subheader("Sales-level rollup (by bucket)")
-            st.caption(
-                "Higher-level summary for Sales, rolled up from the detailed "
-                "operation predictions."
-            )
-            if sales_rows:
-                df_sales = pd.DataFrame(sales_rows)
-                st.dataframe(df_sales)
-            else:
-                st.info("No Sales-level rollup available for this quote.")
+            sales_tab, ops_tab = st.tabs(["Sales view", "Operations view"])
 
-            st.subheader("Project totals")
-            st.write(
-                f"P10: {pred.total_p10:.1f} h, "
-                f"P50: {pred.total_p50:.1f} h, "
-                f"P90: {pred.total_p90:.1f} h"
-            )
+            with sales_tab:
+                st.subheader("Project summary")
+                cols = st.columns(len(project_cols))
+                for col, label, val in zip(cols, project_cols, project_values):
+                    col.metric(label, val)
+
+                if project_status:
+                    st.caption(project_status)
+
+                st.subheader("Sales-level summary")
+                if sales_summary_rows_exist and df_sales_summary_sorted is not None:
+                    display_cols = [
+                        "Role",
+                        "Recommended hours (P50)",
+                        "Range (P10–P90)",
+                        "Confidence",
+                    ]
+                    if has_quoted_hours:
+                        display_cols += [
+                            "Quoted hours",
+                            "Delta (quoted - model)",
+                            "Status",
+                        ]
+                    st.dataframe(df_sales_summary_sorted[display_cols])
+
+                    if has_quoted_hours:
+                        df_chart = df_sales_summary_sorted[
+                            df_sales_summary_sorted["Role"] != "TOTAL"
+                        ][["Role", "Recommended hours (P50)", "Quoted hours"]]
+                        if not df_chart.empty:
+                            chart_data = df_chart.melt(
+                                id_vars="Role",
+                                value_vars=["Recommended hours (P50)", "Quoted hours"],
+                                var_name="Source",
+                                value_name="Hours",
+                            )
+                            chart = (
+                                alt.Chart(chart_data)
+                                .mark_bar()
+                                .encode(
+                                    x=alt.X("Role:N", sort="-y"),
+                                    y=alt.Y("Hours:Q"),
+                                    color="Source:N",
+                                    column=alt.Column("Source:N", header=alt.Header(title=None)),
+                                    tooltip=["Role", "Source", "Hours"],
+                                )
+                                .resolve_scale(y="shared")
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                else:
+                    st.info("No Sales-level rollup available for this quote.")
+
+            with ops_tab:
+                st.subheader("Per-operation predictions")
+                st.dataframe(df_out)
 
 
 # Batch Quotes tab
