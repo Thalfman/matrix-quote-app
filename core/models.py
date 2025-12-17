@@ -6,16 +6,10 @@ import math
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-import math
-import os
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
-from catboost import CatBoostRegressor, Pool
-from mapie.quantile_regression import MapieQuantileRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
@@ -66,15 +60,6 @@ def _require_mapie():
     return importlib.import_module("mapie.quantile_regression").MapieQuantileRegressor
 
 
-    model_lo: CatBoostRegressor
-    model_mid: CatBoostRegressor
-    model_hi: CatBoostRegressor
-    abs_err_calib_sorted: np.ndarray
-    n_calib: int
-    n_test: int
-    mapie_model: MapieQuantileRegressor
-
-
 def _prepare_cat_features_inplace(X: pd.DataFrame, cat_features: Sequence[str]):
     for col in cat_features:
         if col not in X.columns:
@@ -84,7 +69,7 @@ def _prepare_cat_features_inplace(X: pd.DataFrame, cat_features: Sequence[str]):
 
 def _make_pool(
     X: pd.DataFrame, feature_names: Sequence[str], cat_feature_names: Sequence[str]
-) -> Pool:
+) -> Any:
     CatBoostRegressor, Pool = _require_catboost()
     X_ordered = X.reindex(columns=feature_names)
     cat_indices = [feature_names.index(c) for c in cat_feature_names if c in feature_names]
@@ -117,7 +102,7 @@ def _compute_qhat(nonconformity: np.ndarray, alpha: float) -> float:
 
 
 def _calibrated_interval(
-    mapie_model: MapieQuantileRegressor, X_arr: np.ndarray
+    mapie_model: Any, X_arr: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     y_pred, y_pis = mapie_model.predict(X_arr, ensemble=False)
     # y_pis shape: (n_samples, n_alpha, 2)
@@ -139,11 +124,6 @@ def _within_tol_rule() -> str:
     return f"max({int(TOL_PCT * 100)}% of p50, {TOL_MIN_OP_HOURS}h)"
 
 
-
-def _within_tol_rule() -> str:
-    return f"max({int(TOL_PCT * 100)}% of p50, {TOL_MIN_OP_HOURS}h)"
-
-
 class _CatBoostQuantileWrapper:
     """
     Lightweight wrapper so MAPIE can call .predict on a single estimator.
@@ -154,9 +134,9 @@ class _CatBoostQuantileWrapper:
         self,
         feature_names: Sequence[str],
         cat_features: Sequence[str],
-        model_lo: CatBoostRegressor,
-        model_mid: CatBoostRegressor,
-        model_hi: CatBoostRegressor,
+        model_lo: Any,
+        model_mid: Any,
+        model_hi: Any,
     ):
         self.feature_names = list(feature_names)
         self.cat_features = list(cat_features)
@@ -243,11 +223,6 @@ def train_one_op(
         "allow_writing_files": False,
         "verbose": False,
     }
-
-    model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
-    model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
-    model_hi = CatBoostRegressor(loss_function="Quantile:alpha=0.95", **base_params)
-
 
     model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
     model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
