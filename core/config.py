@@ -48,6 +48,11 @@ SALES_BUCKET_MAP = {
     "pm200": "PM",
 }
 
+# Tolerance rules for "within ±T" confidence derived from held-out data.
+TOL_PCT = 0.10
+TOL_MIN_OP_HOURS = 5.0
+TOL_MIN_TOTAL_HOURS = 10.0
+
 # Numeric features that should be available (or reasonably estimable) at quote time.
 # These are the only numeric inputs the quote-time models are allowed to use.
 QUOTE_NUM_FEATURES = [
