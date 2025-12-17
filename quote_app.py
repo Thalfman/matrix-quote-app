@@ -23,7 +23,7 @@ from core.config import (
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
-from core.models import train_one_op, load_model
+from core.models import CatBoostCQRBundle, train_one_op, load_model
 from service.predict_lib import predict_quote, predict_quotes_df
 
 MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")
@@ -288,18 +288,15 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
-                pipe = load_model(target_choice)
-                pre = pipe.named_steps["preprocess"]
-                model = pipe.named_steps["model"]
+                model_obj = load_model(target_choice)
 
-                try:
-                    feature_names = pre.get_feature_names_out()
-                except Exception:
-                    feature_names = [
-                        f"f_{i}" for i in range(len(model.feature_importances_))
-                    ]
-
-                importances = model.feature_importances_
+                if isinstance(model_obj, CatBoostCQRBundle):
+                    feature_names = model_obj.feature_names
+                    importances = model_obj.model_mid.get_feature_importance()
+                else:
+                    st.error("Only CatBoost CQR models are supported.")
+                    feature_names = []
+                    importances = []
                 fi_df = (
                     pd.DataFrame(
                         {"feature": feature_names, "importance": importances}
@@ -546,8 +543,8 @@ with tab_single:
                 summary_row = {
                     "Role": role,
                     "Recommended hours (P50)": p50,
-                    "Range (P10–P90)": f"{p10:.1f}–{p90:.1f}",
-                    "Confidence": confidence.title(),
+                    "Range (Calibrated 90% PI)": f"{p10:.1f}–{p90:.1f}",
+                    "Confidence (held-out prob)": confidence if confidence is not None else 0.0,
                 }
 
                 if has_quoted_hours:
@@ -604,8 +601,7 @@ with tab_single:
                     total_row = {
                         "Role": "TOTAL",
                         "Recommended hours (P50)": df_sales_summary["Recommended hours (P50)"].sum(),
-                        "Range (P10–P90)": "-",
-                        "Confidence": "-",
+                        "Confidence (held-out prob)": "-",
                         "Quoted hours": df_sales_summary["Quoted hours"].sum(),
                         "Delta (quoted - model)": df_sales_summary["Delta (quoted - model)"].sum(),
                         "Status": "-",
@@ -625,6 +621,7 @@ with tab_single:
                         "std_hours": op_pred.std,
                         "rel_width": op_pred.rel_width,
                         "confidence": op_pred.confidence,
+                        "tol_hours": op_pred.tol_hours,
                     }
                 )
             df_out = pd.DataFrame(rows)
@@ -645,8 +642,7 @@ with tab_single:
                     display_cols = [
                         "Role",
                         "Recommended hours (P50)",
-                        "Range (P10–P90)",
-                        "Confidence",
+                        "Confidence (held-out prob)",
                     ]
                     if has_quoted_hours:
                         display_cols += [

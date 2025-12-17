@@ -57,21 +57,31 @@ class OpPrediction(BaseModel):
     """Prediction output for a single operation."""
 
     p50: float = Field(..., description="Median predicted hours")
-    p10: float = Field(..., description="Lower bound (10th percentile)")
-    p90: float = Field(..., description="Upper bound (90th percentile)")
-    std: float = Field(..., description="Std dev across trees")
+    p10: float = Field(..., description="Lower bound of calibrated 90% PI")
+    p90: float = Field(..., description="Upper bound of calibrated 90% PI")
+    std: float = Field(..., description="Std approximation from calibrated PI width")
     rel_width: float = Field(..., description="(p90 - p10) / |p50|")
-    confidence: str = Field(..., description="'high' | 'medium' | 'low'")
+    confidence: Optional[float] = Field(
+        None, description="Empirical probability of |error| within tolerance"
+    )
+    tol_hours: Optional[float] = Field(
+        None, description="Tolerance used for within-±T confidence"
+    )
 
 
 class SalesBucketPrediction(BaseModel):
     """Aggregated prediction output for a Sales bucket."""
 
     p50: float = Field(..., description="Median predicted hours across bucket")
-    p10: float = Field(..., description="Lower bound (10th percentile)")
-    p90: float = Field(..., description="Upper bound (90th percentile)")
+    p10: float = Field(..., description="Lower bound of calibrated 90% PI")
+    p90: float = Field(..., description="Upper bound of calibrated 90% PI")
     rel_width: float = Field(..., description="(p90 - p10) / |p50|")
-    confidence: str = Field(..., description="'high' | 'medium' | 'low'")
+    confidence: Optional[float] = Field(
+        None, description="Empirical probability of |error| within tolerance"
+    )
+    tol_hours: Optional[float] = Field(
+        None, description="Tolerance used for within-±T confidence"
+    )
 
 
 class QuotePrediction(BaseModel):
@@ -81,7 +91,18 @@ class QuotePrediction(BaseModel):
     total_p50: float
     total_p10: float
     total_p90: float
+    total_confidence: Optional[float] = Field(
+        None,
+        description="Conservative project-level probability of |error| within tolerance",
+    )
     sales_buckets: Dict[str, SalesBucketPrediction] = Field(
         default_factory=dict,
         description="Rollups of operation predictions by Sales bucket",
+    )
+    tol_hours: Optional[float] = Field(
+        None, description="Tolerance used for total within-±T confidence"
+    )
+    within_tol_prob: Optional[float] = Field(
+        None,
+        description="Conservative held-out probability of |error| within tol_hours",
     )
