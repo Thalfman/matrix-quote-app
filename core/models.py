@@ -6,10 +6,16 @@ import math
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+import math
+import os
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
+from catboost import CatBoostRegressor, Pool
+from mapie.quantile_regression import MapieQuantileRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
@@ -58,6 +64,15 @@ def _require_mapie():
             "mapie is required for conformal quantile calibration. Please install mapie."
         )
     return importlib.import_module("mapie.quantile_regression").MapieQuantileRegressor
+
+
+    model_lo: CatBoostRegressor
+    model_mid: CatBoostRegressor
+    model_hi: CatBoostRegressor
+    abs_err_calib_sorted: np.ndarray
+    n_calib: int
+    n_test: int
+    mapie_model: MapieQuantileRegressor
 
 
 def _prepare_cat_features_inplace(X: pd.DataFrame, cat_features: Sequence[str]):
@@ -118,6 +133,11 @@ def _calibrated_interval(
 
     std = (p90 - p10) / 3.29
     return p50, p10, p90, std
+
+
+def _within_tol_rule() -> str:
+    return f"max({int(TOL_PCT * 100)}% of p50, {TOL_MIN_OP_HOURS}h)"
+
 
 
 def _within_tol_rule() -> str:
@@ -223,6 +243,11 @@ def train_one_op(
         "allow_writing_files": False,
         "verbose": False,
     }
+
+    model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
+    model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
+    model_hi = CatBoostRegressor(loss_function="Quantile:alpha=0.95", **base_params)
+
 
     model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
     model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
