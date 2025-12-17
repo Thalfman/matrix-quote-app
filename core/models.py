@@ -1,6 +1,11 @@
 # core/models.py
 # Model training + loading + interval predictions.
 
+import importlib
+import math
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import math
 import os
 from dataclasses import dataclass
@@ -33,6 +38,34 @@ class CatBoostCQRBundle:
     q_lo: float
     q_hi: float
     qhat: float
+    model_lo: Any
+    model_mid: Any
+    model_hi: Any
+    abs_err_calib_sorted: np.ndarray
+    n_calib: int
+    n_test: int
+    mapie_model: Any
+
+
+def _require_catboost():
+    spec = importlib.util.find_spec("catboost")
+    if spec is None:
+        raise ImportError(
+            "catboost is required for training and inference. Please install catboost."
+        )
+    catboost = importlib.import_module("catboost")
+    return catboost.CatBoostRegressor, catboost.Pool
+
+
+def _require_mapie():
+    spec = importlib.util.find_spec("mapie.quantile_regression")
+    if spec is None:
+        raise ImportError(
+            "mapie is required for conformal quantile calibration. Please install mapie."
+        )
+    return importlib.import_module("mapie.quantile_regression").MapieQuantileRegressor
+
+
     model_lo: CatBoostRegressor
     model_mid: CatBoostRegressor
     model_hi: CatBoostRegressor
@@ -52,6 +85,7 @@ def _prepare_cat_features_inplace(X: pd.DataFrame, cat_features: Sequence[str]):
 def _make_pool(
     X: pd.DataFrame, feature_names: Sequence[str], cat_feature_names: Sequence[str]
 ) -> Pool:
+    CatBoostRegressor, Pool = _require_catboost()
     X_ordered = X.reindex(columns=feature_names)
     cat_indices = [feature_names.index(c) for c in cat_feature_names if c in feature_names]
     return Pool(X_ordered, cat_features=cat_indices)
@@ -99,6 +133,11 @@ def _calibrated_interval(
 
     std = (p90 - p10) / 3.29
     return p50, p10, p90, std
+
+
+def _within_tol_rule() -> str:
+    return f"max({int(TOL_PCT * 100)}% of p50, {TOL_MIN_OP_HOURS}h)"
+
 
 
 def _within_tol_rule() -> str:
@@ -170,6 +209,8 @@ def train_one_op(
     _prepare_cat_features_inplace(X, cat_features)
 
     n_rows = len(X)
+    CatBoostRegressor, Pool = _require_catboost()
+    MapieQuantileRegressor = _require_mapie()
 
     if n_rows >= 25:
         X_temp, X_test, y_temp, y_test = train_test_split(
@@ -202,6 +243,11 @@ def train_one_op(
         "allow_writing_files": False,
         "verbose": False,
     }
+
+    model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
+    model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
+    model_hi = CatBoostRegressor(loss_function="Quantile:alpha=0.95", **base_params)
+
 
     model_lo = CatBoostRegressor(loss_function="Quantile:alpha=0.05", **base_params)
     model_mid = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
