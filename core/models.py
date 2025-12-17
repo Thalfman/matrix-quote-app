@@ -311,7 +311,7 @@ def train_one_op(
 
 def _prepare_bundle_features(
     X_df: pd.DataFrame, bundle: CatBoostCQRBundle
-) -> Tuple[pd.DataFrame, Pool]:
+) -> Tuple[pd.DataFrame, Any]:
     X = X_df.copy()
     _prepare_cat_features_inplace(X, bundle.cat_feature_names)
     X = X.reindex(columns=bundle.feature_names)
