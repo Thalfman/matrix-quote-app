@@ -1,5 +1,7 @@
-# service/predict_lib.py
-# Small library that exposes prediction functions for single and batch inputs.
+"""
+service/predict_lib.py
+Prediction helpers for single and batch quotes with calibrated intervals.
+"""
 
 from typing import Dict
 
@@ -7,25 +9,20 @@ import numpy as np
 import pandas as pd
 
 from core.config import (
-    TARGETS,
-    QUOTE_NUM_FEATURES,
+    CONFIDENCE_LEVELS,
+    DEFAULT_CONFIDENCE,
     QUOTE_CAT_FEATURES,
+    QUOTE_NUM_FEATURES,
     SALES_BUCKETS,
     SALES_BUCKET_MAP,
-    TOL_PCT,
-    TOL_MIN_OP_HOURS,
-    TOL_MIN_TOTAL_HOURS,
+    TARGETS,
 )
 from core.features import prepare_quote_features
-from core.models import (
-    empirical_within_tol_prob,
-    load_model,
-    predict_with_interval,
-)
+from core.models import load_model, predict_with_interval
 from core.schemas import (
+    OpPrediction,
     QuoteInput,
     QuotePrediction,
-    OpPrediction,
     SalesBucketPrediction,
 )
 
@@ -40,151 +37,137 @@ def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     return df
 
 
-def _op_tol(p50: float) -> float:
-    return max(TOL_PCT * abs(p50), TOL_MIN_OP_HOURS)
+def _validate_confidence(confidence_level: float) -> float:
+    if confidence_level not in CONFIDENCE_LEVELS:
+        raise ValueError(
+            f"Confidence level {confidence_level} not supported. "
+            f"Choose from {CONFIDENCE_LEVELS}."
+        )
+    return confidence_level
 
 
-def _total_tol(total_p50: float) -> float:
-    return max(TOL_PCT * abs(total_p50), TOL_MIN_TOTAL_HOURS)
-
-
-def predict_quote(q: QuoteInput) -> QuotePrediction:
+def predict_quote(
+    q: QuoteInput, confidence_level: float = DEFAULT_CONFIDENCE
+) -> QuotePrediction:
     """
     Predict hours for a single project described by QuoteInput.
-    Returns per-operation P10/P50/P90/std/confidence plus totals.
+    Returns per-operation calibrated intervals + Sales/total rollups.
     """
+    confidence_level = _validate_confidence(confidence_level)
     df = _quote_to_df(q)
 
     ops: Dict[str, OpPrediction] = {}
     bucket_totals = {
-        bucket: {"p10": 0.0, "p50": 0.0, "p90": 0.0} for bucket in SALES_BUCKETS
+        bucket: {"estimate": 0.0, "lo": 0.0, "hi": 0.0} for bucket in SALES_BUCKETS
     }
-    total_p50 = total_p10 = total_p90 = 0.0
-    total_within = []
+    total_estimate = total_lo = total_hi = 0.0
 
     for target in TARGETS:
         model_obj = load_model(target)
-        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(
-            model_obj, df
-        )
+        preds = predict_with_interval(model_obj, df, confidence_level)
 
-        p50 = float(p50_arr[0])
-        p10 = float(p10_arr[0])
-        p90 = float(p90_arr[0])
-        std = float(std_arr[0])
-        eps = 1e-6
-        rel_width = (p90 - p10) / max(abs(p50), eps)
-
-        tol = _op_tol(p50)
-        p_within = empirical_within_tol_prob(model_obj, tol)
-
-        if p_within is not None:
-            confidence = float(p_within)
-        else:
-            confidence = None
+        estimate = float(preds["estimate"][0])
+        lo = float(preds["lo"][0])
+        hi = float(preds["hi"][0])
+        plus_minus = float(preds["plus_minus"][0])
 
         op_name = target.replace("_actual_hours", "")
         ops[op_name] = OpPrediction(
-            p50=p50,
-            p10=p10,
-            p90=p90,
-            std=std,
-            rel_width=rel_width,
-            confidence=confidence,
-            tol_hours=tol,
+            estimate=estimate,
+            lo=lo,
+            hi=hi,
+            plus_minus=plus_minus,
+            confidence=confidence_level,
         )
 
         bucket = SALES_BUCKET_MAP.get(op_name)
         if bucket in bucket_totals:
-            bucket_totals[bucket]["p10"] += p10
-            bucket_totals[bucket]["p50"] += p50
-            bucket_totals[bucket]["p90"] += p90
-        if p_within is not None:
-            total_within.append(p_within)
+            bucket_totals[bucket]["estimate"] += estimate
+            bucket_totals[bucket]["lo"] += lo
+            bucket_totals[bucket]["hi"] += hi
 
-        total_p50 += p50
-        total_p10 += p10
-        total_p90 += p90
+        total_estimate += estimate
+        total_lo += lo
+        total_hi += hi
 
     sales_buckets: Dict[str, SalesBucketPrediction] = {}
     for bucket in SALES_BUCKETS:
-        totals = bucket_totals.get(bucket, {"p10": 0.0, "p50": 0.0, "p90": 0.0})
-        p10 = float(totals["p10"])
-        p50 = float(totals["p50"])
-        p90 = float(totals["p90"])
-        eps = 1e-6
-        rel_width = (p90 - p10) / max(abs(p50), eps)
-        calibrated_conf = [
-            op_pred.confidence for op_pred in ops.values() if op_pred.confidence is not None
-        ]
-        bucket_conf = min(calibrated_conf) if calibrated_conf else None
-
+        totals = bucket_totals.get(bucket, {"estimate": 0.0, "lo": 0.0, "hi": 0.0})
+        bucket_plus_minus = max(
+            totals["estimate"] - totals["lo"], totals["hi"] - totals["estimate"]
+        )
         sales_buckets[bucket] = SalesBucketPrediction(
-            p50=p50,
-            p10=p10,
-            p90=p90,
-            rel_width=rel_width,
-            confidence=bucket_conf if bucket_conf is not None else 0.0,
-            tol_hours=_total_tol(p50),
+            estimate=float(totals["estimate"]),
+            lo=float(totals["lo"]),
+            hi=float(totals["hi"]),
+            plus_minus=float(bucket_plus_minus),
+            confidence=confidence_level,
         )
 
-    tol_total = _total_tol(total_p50)
-    total_within_prob = None
-    if total_within:
-        total_within_prob = min(total_within)
+    total_plus_minus = max(total_estimate - total_lo, total_hi - total_estimate)
 
     return QuotePrediction(
         ops=ops,
-        total_p50=float(total_p50),
-        total_p10=float(total_p10),
-        total_p90=float(total_p90),
-        total_confidence=total_within_prob,
+        total_estimate=float(total_estimate),
+        total_lo=float(total_lo),
+        total_hi=float(total_hi),
+        total_plus_minus=float(total_plus_minus),
+        confidence=confidence_level,
         sales_buckets=sales_buckets,
-        tol_hours=tol_total,
-        within_tol_prob=total_within_prob,
     )
 
 
-def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
+def predict_quotes_df(
+    df_in: pd.DataFrame, confidence_level: float = DEFAULT_CONFIDENCE
+) -> pd.DataFrame:
     """
     Batch prediction for a DataFrame with quote-time columns.
-    Adds per-operation P10/P50/P90/std and project totals.
+    Adds per-operation calibrated intervals, Sales rollups, and project totals.
     """
+    confidence_level = _validate_confidence(confidence_level)
     df = prepare_quote_features(df_in)
+    df["confidence_level"] = confidence_level
 
-    df["total_p50"] = 0.0
-    df["total_p10"] = 0.0
-    df["total_p90"] = 0.0
+    df["total_estimate"] = 0.0
+    df["total_lo"] = 0.0
+    df["total_hi"] = 0.0
 
-    within_probs_total = []
+    bucket_totals = {
+        bucket: {"estimate": np.zeros(len(df)), "lo": np.zeros(len(df)), "hi": np.zeros(len(df))}
+        for bucket in SALES_BUCKETS
+    }
 
     for target in TARGETS:
-        pipe = load_model(target)
-        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
+        bundle = load_model(target)
+        preds = predict_with_interval(bundle, df, confidence_level)
 
         op_name = target.replace("_actual_hours", "")
-        df[f"{op_name}_p50"] = p50_arr
-        df[f"{op_name}_p10"] = p10_arr
-        df[f"{op_name}_p90"] = p90_arr
-        df[f"{op_name}_std"] = std_arr
+        df[f"{op_name}_estimate"] = preds["estimate"]
+        df[f"{op_name}_lo"] = preds["lo"]
+        df[f"{op_name}_hi"] = preds["hi"]
+        df[f"{op_name}_plus_minus"] = preds["plus_minus"]
 
-        tol_arr = np.maximum(TOL_PCT * np.abs(p50_arr), TOL_MIN_OP_HOURS)
-        within_prob = empirical_within_tol_prob(pipe, tol_arr.mean())
-        if within_prob is not None:
-            df[f"{op_name}_within_tol_prob"] = within_prob
-            df[f"{op_name}_tol_hours"] = tol_arr
+        bucket = SALES_BUCKET_MAP.get(op_name)
+        if bucket in bucket_totals:
+            bucket_totals[bucket]["estimate"] += preds["estimate"]
+            bucket_totals[bucket]["lo"] += preds["lo"]
+            bucket_totals[bucket]["hi"] += preds["hi"]
 
-        df["total_p50"] += p50_arr
-        df["total_p10"] += p10_arr
-        df["total_p90"] += p90_arr
+        df["total_estimate"] += preds["estimate"]
+        df["total_lo"] += preds["lo"]
+        df["total_hi"] += preds["hi"]
 
-        if within_prob is not None:
-            within_probs_total.append(within_prob)
-
-    if within_probs_total:
-        df["total_tol_hours"] = np.maximum(
-            TOL_PCT * np.abs(df["total_p50"]), TOL_MIN_TOTAL_HOURS
+    for bucket, totals in bucket_totals.items():
+        plus_minus = np.maximum(
+            totals["estimate"] - totals["lo"], totals["hi"] - totals["estimate"]
         )
-        df["total_within_tol_prob"] = min(within_probs_total)
+        df[f"{bucket}_estimate"] = totals["estimate"]
+        df[f"{bucket}_lo"] = totals["lo"]
+        df[f"{bucket}_hi"] = totals["hi"]
+        df[f"{bucket}_plus_minus"] = plus_minus
+
+    df["total_plus_minus"] = np.maximum(
+        df["total_estimate"] - df["total_lo"], df["total_hi"] - df["total_estimate"]
+    )
 
     return df

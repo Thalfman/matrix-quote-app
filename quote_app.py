@@ -20,6 +20,8 @@ from core.config import (
     TARGETS,
     REQUIRED_TRAINING_COLS,
     SALES_BUCKETS,
+    CONFIDENCE_LEVELS,
+    DEFAULT_CONFIDENCE,
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
@@ -261,6 +263,26 @@ with tab_perf:
             r2_chart = metrics_df[["target", "r2"]].set_index("target")
             st.bar_chart(r2_chart)
 
+        st.markdown("---")
+        st.subheader("Coverage target vs achieved")
+
+        coverage_rows = []
+        for _, row in metrics_df.iterrows():
+            for conf in CONFIDENCE_LEVELS:
+                key = f"coverage_{int(conf * 100)}"
+                width_key = f"avg_width_{int(conf * 100)}"
+                coverage_rows.append(
+                    {
+                        "operation": row["target"],
+                        "target_confidence": f"{int(conf * 100)}%",
+                        "achieved_coverage": row.get(key, float("nan")),
+                        "avg_interval_width": row.get(width_key, float("nan")),
+                    }
+                )
+
+        df_cov = pd.DataFrame(coverage_rows)
+        st.dataframe(df_cov)
+
 
 # Drivers & Similar Projects tab
 with tab_drivers:
@@ -390,6 +412,15 @@ with tab_single:
     if not st.session_state["models_ready"]:
         st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
     else:
+        confidence_options = [int(c * 100) for c in CONFIDENCE_LEVELS]
+        confidence_pct = st.select_slider(
+            "Prediction confidence",
+            options=confidence_options,
+            value=int(DEFAULT_CONFIDENCE * 100),
+            help="Select the calibrated confidence level for interval bounds.",
+        )
+        confidence_level = confidence_pct / 100.0
+
         industry_segment = st.selectbox(
             "Industry segment",
             ["Automotive", "Food & Beverage", "General Industry"],
@@ -509,7 +540,7 @@ with tab_single:
                 physical_scale_index=physical_scale_index,
                 log_quoted_materials_cost=log_cost,
             )
-            pred = predict_quote(q)
+            pred = predict_quote(q, confidence_level=confidence_level)
 
             sales_rows = []
             for bucket in SALES_BUCKETS:
@@ -519,10 +550,10 @@ with tab_single:
                 sales_rows.append(
                     {
                         "Sales bucket": bucket,
-                        "p10_hours": bucket_pred.p10,
-                        "p50_hours": bucket_pred.p50,
-                        "p90_hours": bucket_pred.p90,
-                        "confidence": bucket_pred.confidence,
+                        "estimate_hours": bucket_pred.estimate,
+                        "lo_hours": bucket_pred.lo,
+                        "hi_hours": bucket_pred.hi,
+                        "plus_minus": bucket_pred.plus_minus,
                     }
                 )
 
@@ -535,23 +566,23 @@ with tab_single:
 
             for row in sales_rows:
                 role = row["Sales bucket"]
-                p10 = row["p10_hours"]
-                p50 = row["p50_hours"]
-                p90 = row["p90_hours"]
-                confidence = row["confidence"]
+                estimate = row["estimate_hours"]
+                lo = row["lo_hours"]
+                hi = row["hi_hours"]
+                plus_minus = row["plus_minus"]
 
                 summary_row = {
                     "Role": role,
-                    "Recommended hours (P50)": p50,
-                    "Range (Calibrated 90% PI)": f"{p10:.1f}–{p90:.1f}",
-                    "Confidence (held-out prob)": confidence if confidence is not None else 0.0,
+                    "Recommended hours (estimate)": estimate,
+                    "Interval": f"{confidence_pct}% confident between [{lo:.1f}, {hi:.1f}]",
+                    "±Hours": plus_minus,
                 }
 
                 if has_quoted_hours:
                     quoted_val = quoted_hours_by_bucket.get(role)
                     if quoted_val is not None:
-                        delta = quoted_val - p50
-                        threshold = max(0.1 * abs(p50), 5)
+                        delta = quoted_val - estimate
+                        threshold = max(0.1 * abs(estimate), 5)
                         if abs(delta) <= threshold:
                             delta_status = "Close"
                         elif delta > 0:
@@ -568,9 +599,13 @@ with tab_single:
                         )
                 sales_summary_rows.append(summary_row)
 
-            total_model_hours = pred.total_p50
-            project_cols = ["Model total (P50)"]
-            project_values = [f"{total_model_hours:.1f} h"]
+            total_model_hours = pred.total_estimate
+            project_cols = ["Model total (estimate)", f"{confidence_pct}% interval", "± hours"]
+            project_values = [
+                f"{total_model_hours:.1f} h",
+                f"[{pred.total_lo:.1f}, {pred.total_hi:.1f}]",
+                f"±{pred.total_plus_minus:.1f} h",
+            ]
             project_status = None
 
             if has_quoted_hours:
@@ -594,14 +629,15 @@ with tab_single:
             if sales_summary_rows_exist:
                 df_sales_summary = pd.DataFrame(sales_summary_rows)
                 df_sales_summary_sorted = df_sales_summary.sort_values(
-                    "Recommended hours (P50)", ascending=False
+                    "Recommended hours (estimate)", ascending=False
                 )
 
                 if has_quoted_hours:
                     total_row = {
                         "Role": "TOTAL",
-                        "Recommended hours (P50)": df_sales_summary["Recommended hours (P50)"].sum(),
-                        "Confidence (held-out prob)": "-",
+                        "Recommended hours (estimate)": df_sales_summary["Recommended hours (estimate)"].sum(),
+                        "Interval": f"{confidence_pct}% confidence (rollup)",
+                        "±Hours": df_sales_summary["±Hours"].sum(),
                         "Quoted hours": df_sales_summary["Quoted hours"].sum(),
                         "Delta (quoted - model)": df_sales_summary["Delta (quoted - model)"].sum(),
                         "Status": "-",
@@ -615,13 +651,12 @@ with tab_single:
                 rows.append(
                     {
                         "operation": op,
-                        "p10_hours": op_pred.p10,
-                        "p50_hours": op_pred.p50,
-                        "p90_hours": op_pred.p90,
-                        "std_hours": op_pred.std,
-                        "rel_width": op_pred.rel_width,
-                        "confidence": op_pred.confidence,
-                        "tol_hours": op_pred.tol_hours,
+                        "estimate_hours": op_pred.estimate,
+                        "lo_hours": op_pred.lo,
+                        "hi_hours": op_pred.hi,
+                        "plus_minus_hours": op_pred.plus_minus,
+                        "Interval": f"{confidence_pct}% confident between [{op_pred.lo:.1f}, {op_pred.hi:.1f}]",
+                        "confidence": f"{confidence_pct}%",
                     }
                 )
             df_out = pd.DataFrame(rows)
@@ -636,13 +671,18 @@ with tab_single:
 
                 if project_status:
                     st.caption(project_status)
+                st.caption(
+                    f"{confidence_pct}% confident between [{pred.total_lo:.1f}, {pred.total_hi:.1f}] "
+                    f"(±{pred.total_plus_minus:.1f} hours)"
+                )
 
                 st.subheader("Sales-level summary")
                 if sales_summary_rows_exist and df_sales_summary_sorted is not None:
                     display_cols = [
                         "Role",
-                        "Recommended hours (P50)",
-                        "Confidence (held-out prob)",
+                        "Recommended hours (estimate)",
+                        "Interval",
+                        "±Hours",
                     ]
                     if has_quoted_hours:
                         display_cols += [
@@ -655,11 +695,11 @@ with tab_single:
                     if has_quoted_hours:
                         df_chart = df_sales_summary_sorted[
                             df_sales_summary_sorted["Role"] != "TOTAL"
-                        ][["Role", "Recommended hours (P50)", "Quoted hours"]]
+                        ][["Role", "Recommended hours (estimate)", "Quoted hours"]]
                         if not df_chart.empty:
                             chart_data = df_chart.melt(
                                 id_vars="Role",
-                                value_vars=["Recommended hours (P50)", "Quoted hours"],
+                                value_vars=["Recommended hours (estimate)", "Quoted hours"],
                                 var_name="Source",
                                 value_name="Hours",
                             )
@@ -691,6 +731,14 @@ with tab_batch:
     if not st.session_state["models_ready"]:
         st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
     else:
+        confidence_options = [int(c * 100) for c in CONFIDENCE_LEVELS]
+        confidence_pct_batch = st.select_slider(
+            "Prediction confidence for this batch",
+            options=confidence_options,
+            value=int(DEFAULT_CONFIDENCE * 100),
+        )
+        confidence_level_batch = confidence_pct_batch / 100.0
+
         st.markdown(
             "Your file must include at least these columns: "
             f"`{', '.join(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)}`"
@@ -722,7 +770,7 @@ with tab_batch:
                 st.error(f"Missing required columns: {missing}")
             else:
                 if st.button("Run predictions on all rows"):
-                    df_out = predict_quotes_df(df_in)
+                    df_out = predict_quotes_df(df_in, confidence_level=confidence_level_batch)
                     st.subheader("Output preview")
                     st.dataframe(df_out.head())
 
@@ -730,7 +778,7 @@ with tab_batch:
                     st.download_button(
                         label="Download predictions CSV",
                         data=csv_bytes,
-                        file_name="quote_predictions.csv",
+                        file_name=f"quote_predictions_{confidence_pct_batch}.csv",
                         mime="text/csv",
                     )
 

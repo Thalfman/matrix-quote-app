@@ -5,17 +5,19 @@ Usage:
     python scripts/smoke_test_train_predict.py
 """
 
+import os
+import sys
+
 import numpy as np
 import pandas as pd
 
-from core.config import TOL_MIN_OP_HOURS, TOL_PCT
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.append(ROOT)
+
+from core.config import CONFIDENCE_LEVELS
 from core.features import engineer_features_for_training, prepare_quote_features
-from core.models import (
-    empirical_within_tol_prob,
-    load_model,
-    predict_with_interval,
-    train_one_op,
-)
+from core.models import load_model, predict_with_interval, train_one_op
 
 
 def build_synthetic_df(rows: int = 40) -> pd.DataFrame:
@@ -90,12 +92,19 @@ def main():
 
     model = load_model("me10_actual_hours")
     df_quote = prepare_quote_features(df_raw.head(1))
-    p50, p10, p90, std = predict_with_interval(model, df_quote)
-    tol = max(TOL_PCT * abs(p50[0]), TOL_MIN_OP_HOURS)
-    within_prob = empirical_within_tol_prob(model, tol)
+    for conf in CONFIDENCE_LEVELS:
+        preds = predict_with_interval(model, df_quote, confidence_level=conf)
+        estimate = preds["estimate"][0]
+        lo = preds["lo"][0]
+        hi = preds["hi"][0]
 
-    print(f"Predicted p10/p50/p90/std: {p10[0]:.2f}, {p50[0]:.2f}, {p90[0]:.2f}, {std[0]:.2f}")
-    print(f"Empirical within ±{tol:.1f}h probability:", within_prob)
+        assert lo >= 0, "Lower bound must be non-negative"
+        assert lo <= estimate <= hi, "Estimate must fall within calibrated bounds"
+
+        print(
+            f"{int(conf*100)}% confident between [{lo:.2f}, {hi:.2f}] "
+            f"(estimate={estimate:.2f}, ±{preds['plus_minus'][0]:.2f})"
+        )
 
 
 if __name__ == "__main__":
