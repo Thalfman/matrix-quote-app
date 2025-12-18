@@ -45,6 +45,21 @@ class CatBoostCQRBundle:
     evaluation_rows: int
     trained_at: str
 
+    @property
+    def model_mid(self):
+        """Backward-compatibility alias for the median/point model."""
+        pm = getattr(self, "point_model", None)
+        if pm is not None:
+            return pm
+
+        legacy = self.__dict__.get("model_mid", None)
+        if legacy is not None:
+            return legacy
+
+        raise AttributeError(
+            "CatBoostCQRBundle has neither point_model nor legacy model_mid"
+        )
+
 
 def _require_catboost():
     spec = importlib.util.find_spec("catboost")

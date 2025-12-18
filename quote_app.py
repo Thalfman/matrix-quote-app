@@ -25,7 +25,13 @@ from core.config import (
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
-from core.models import CatBoostCQRBundle, train_one_op, load_model
+from core.models import (
+    CatBoostCQRBundle,
+    _make_pool,
+    _prepare_cat_features_inplace,
+    load_model,
+    train_one_op,
+)
 from service.predict_lib import predict_quote, predict_quotes_df
 
 MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")
@@ -311,25 +317,78 @@ with tab_drivers:
                 )
 
                 model_obj = load_model(target_choice)
+                fi_df = pd.DataFrame()
 
                 if isinstance(model_obj, CatBoostCQRBundle):
-                    feature_names = model_obj.feature_names
-                    importances = model_obj.model_mid.get_feature_importance()
+                    feature_names = getattr(model_obj, "feature_names", [])
+                    cat_feature_names = getattr(model_obj, "cat_feature_names", [])
+
+                    cb_model = getattr(model_obj, "point_model", None) or model_obj.__dict__.get(
+                        "model_mid"
+                    )
+
+                    if cb_model is None:
+                        st.error(
+                            "CatBoost bundle does not contain a usable model (missing point_model/model_mid)."
+                        )
+                    else:
+                        try:
+                            importances = cb_model.get_feature_importance()
+                        except Exception:
+                            try:
+                                if not feature_names:
+                                    raise ValueError(
+                                        "Feature names unavailable to compute importance."
+                                    )
+                                df_pool_source = (
+                                    df_master.sample(
+                                        n=min(len(df_master), 5000), random_state=42
+                                    )
+                                    if len(df_master) > 5000
+                                    else df_master
+                                )
+                                df_pool = df_pool_source.copy()
+                                for col in feature_names:
+                                    if col not in df_pool.columns:
+                                        df_pool[col] = 0
+                                _prepare_cat_features_inplace(
+                                    df_pool, cat_feature_names
+                                )
+                                pool = _make_pool(
+                                    df_pool, feature_names, cat_feature_names
+                                )
+                                importances = cb_model.get_feature_importance(pool)
+                            except Exception as fi_err:
+                                st.error(
+                                    f"Could not compute feature importance for {target_choice}: {fi_err}"
+                                )
+                                importances = []
+
+                        if feature_names and len(feature_names) == len(importances):
+                            fi_df = (
+                                pd.DataFrame(
+                                    {"feature": feature_names, "importance": importances}
+                                )
+                                .sort_values("importance", ascending=False)
+                                .reset_index(drop=True)
+                            )
+                        elif feature_names:
+                            st.warning(
+                                "Feature importance could not be aligned with feature names."
+                            )
+                        else:
+                            st.info("Feature names unavailable for importance display.")
                 else:
                     st.error("Only CatBoost CQR models are supported.")
-                    feature_names = []
-                    importances = []
-                fi_df = (
-                    pd.DataFrame(
-                        {"feature": feature_names, "importance": importances}
-                    )
-                    .sort_values("importance", ascending=False)
-                    .reset_index(drop=True)
-                )
 
-                st.write("Top 15 features by importance")
-                st.dataframe(fi_df.head(15))
-                st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
+                if not fi_df.empty:
+                    st.write("Top 15 features by importance")
+                    st.dataframe(fi_df.head(15))
+                    st.bar_chart(
+                        fi_df.head(15).set_index("feature")["importance"]
+                    )
+                else:
+                    st.info("Feature importance is unavailable for the selected model.")
 
         # Similar projects: filter-based helper
         with col_dr2:
