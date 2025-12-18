@@ -279,7 +279,7 @@ with tab_drivers:
             modeled_ops = [
                 t
                 for t in TARGETS
-                if os.path.exists(os.path.join("models", f"{t}_v1.joblib"))
+                if os.path.exists(os.path.join("models", f"{t}_v2.joblib"))
             ]
             if not modeled_ops:
                 st.info("No trained models found in ./models.")
@@ -288,18 +288,9 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
-                pipe = load_model(target_choice)
-                pre = pipe.named_steps["preprocess"]
-                model = pipe.named_steps["model"]
-
-                try:
-                    feature_names = pre.get_feature_names_out()
-                except Exception:
-                    feature_names = [
-                        f"f_{i}" for i in range(len(model.feature_importances_))
-                    ]
-
-                importances = model.feature_importances_
+                bundle = load_model(target_choice, version="v2")
+                feature_names = bundle.feature_names
+                importances = bundle.point_model.get_feature_importance()
                 fi_df = (
                     pd.DataFrame(
                         {"feature": feature_names, "importance": importances}
@@ -464,11 +455,18 @@ with tab_single:
             "Physical scale index (optional)", min_value=0.0
         )
         estimated_materials_cost = st.number_input(
-        "Estimated materials cost", min_value=0.0
+            "Estimated materials cost", min_value=0.0
+        )
+        confidence = st.slider(
+            "Confidence (prediction interval coverage)",
+            min_value=0.80,
+            max_value=0.95,
+            value=0.90,
+            step=0.01,
         )
 
         if st.button("Estimate hours"):
-
+            conf_pct = int(round(confidence * 100))
             log_cost = float(math.log1p(estimated_materials_cost))
 
             q = QuoteInput(
@@ -512,7 +510,12 @@ with tab_single:
                 physical_scale_index=physical_scale_index,
                 log_quoted_materials_cost=log_cost,
             )
-            pred = predict_quote(q)
+            pred = predict_quote(q, confidence=confidence)
+
+            if pred.missing_models:
+                st.warning(
+                    "No trained model found for: " + ", ".join(sorted(pred.missing_models))
+                )
 
             sales_rows = []
             for bucket in SALES_BUCKETS:
@@ -522,9 +525,9 @@ with tab_single:
                 sales_rows.append(
                     {
                         "Sales bucket": bucket,
-                        "p10_hours": bucket_pred.p10,
-                        "p50_hours": bucket_pred.p50,
-                        "p90_hours": bucket_pred.p90,
+                        "estimate_hours": bucket_pred.estimate,
+                        "low_hours": bucket_pred.low,
+                        "high_hours": bucket_pred.high,
                         "confidence": bucket_pred.confidence,
                     }
                 )
@@ -538,23 +541,22 @@ with tab_single:
 
             for row in sales_rows:
                 role = row["Sales bucket"]
-                p10 = row["p10_hours"]
-                p50 = row["p50_hours"]
-                p90 = row["p90_hours"]
-                confidence = row["confidence"]
+                est = row["estimate_hours"]
+                low = row["low_hours"]
+                high = row["high_hours"]
 
                 summary_row = {
                     "Role": role,
-                    "Recommended hours (P50)": p50,
-                    "Range (P10–P90)": f"{p10:.1f}–{p90:.1f}",
-                    "Confidence": confidence.title(),
+                    "Recommended hours (estimate)": est,
+                    f"Range ({conf_pct}% PI)": f"{low:.1f}–{high:.1f}",
+                    "Confidence": f"{conf_pct}% (heuristic sum)",
                 }
 
                 if has_quoted_hours:
                     quoted_val = quoted_hours_by_bucket.get(role)
                     if quoted_val is not None:
-                        delta = quoted_val - p50
-                        threshold = max(0.1 * abs(p50), 5)
+                        delta = quoted_val - est
+                        threshold = max(0.1 * abs(est), 5)
                         if abs(delta) <= threshold:
                             delta_status = "Close"
                         elif delta > 0:
@@ -571,9 +573,9 @@ with tab_single:
                         )
                 sales_summary_rows.append(summary_row)
 
-            total_model_hours = pred.total_p50
-            project_cols = ["Model total (P50)"]
-            project_values = [f"{total_model_hours:.1f} h"]
+            total_model_hours = pred.total_estimate
+            project_cols = ["Model total (estimate)", f"Model range ({conf_pct}% PI)"]
+            project_values = [f"{total_model_hours:.1f} h", f"{pred.total_low:.1f}–{pred.total_high:.1f} h"]
             project_status = None
 
             if has_quoted_hours:
@@ -597,17 +599,21 @@ with tab_single:
             if sales_summary_rows_exist:
                 df_sales_summary = pd.DataFrame(sales_summary_rows)
                 df_sales_summary_sorted = df_sales_summary.sort_values(
-                    "Recommended hours (P50)", ascending=False
+                    "Recommended hours (estimate)", ascending=False
                 )
 
                 if has_quoted_hours:
                     total_row = {
                         "Role": "TOTAL",
-                        "Recommended hours (P50)": df_sales_summary["Recommended hours (P50)"].sum(),
-                        "Range (P10–P90)": "-",
+                        "Recommended hours (estimate)": df_sales_summary[
+                            "Recommended hours (estimate)"
+                        ].sum(),
+                        f"Range ({conf_pct}% PI)": "-",
                         "Confidence": "-",
                         "Quoted hours": df_sales_summary["Quoted hours"].sum(),
-                        "Delta (quoted - model)": df_sales_summary["Delta (quoted - model)"].sum(),
+                        "Delta (quoted - model)": df_sales_summary[
+                            "Delta (quoted - model)"
+                        ].sum(),
                         "Status": "-",
                     }
                     df_sales_summary_sorted = pd.concat(
@@ -619,12 +625,10 @@ with tab_single:
                 rows.append(
                     {
                         "operation": op,
-                        "p10_hours": op_pred.p10,
-                        "p50_hours": op_pred.p50,
-                        "p90_hours": op_pred.p90,
-                        "std_hours": op_pred.std,
-                        "rel_width": op_pred.rel_width,
-                        "confidence": op_pred.confidence,
+                        "estimate_hours": op_pred.estimate,
+                        "low_hours": op_pred.low,
+                        "high_hours": op_pred.high,
+                        "calibration_rows": op_pred.calib_n,
                     }
                 )
             df_out = pd.DataFrame(rows)
@@ -644,8 +648,8 @@ with tab_single:
                 if sales_summary_rows_exist and df_sales_summary_sorted is not None:
                     display_cols = [
                         "Role",
-                        "Recommended hours (P50)",
-                        "Range (P10–P90)",
+                        "Recommended hours (estimate)",
+                        f"Range ({conf_pct}% PI)",
                         "Confidence",
                     ]
                     if has_quoted_hours:
@@ -659,11 +663,11 @@ with tab_single:
                     if has_quoted_hours:
                         df_chart = df_sales_summary_sorted[
                             df_sales_summary_sorted["Role"] != "TOTAL"
-                        ][["Role", "Recommended hours (P50)", "Quoted hours"]]
+                        ][["Role", "Recommended hours (estimate)", "Quoted hours"]]
                         if not df_chart.empty:
                             chart_data = df_chart.melt(
                                 id_vars="Role",
-                                value_vars=["Recommended hours (P50)", "Quoted hours"],
+                                value_vars=["Recommended hours (estimate)", "Quoted hours"],
                                 var_name="Source",
                                 value_name="Hours",
                             )
@@ -725,8 +729,16 @@ with tab_batch:
             if missing:
                 st.error(f"Missing required columns: {missing}")
             else:
+                confidence_batch = st.slider(
+                    "Confidence (prediction interval coverage)",
+                    min_value=0.80,
+                    max_value=0.95,
+                    value=0.90,
+                    step=0.01,
+                    key="batch_confidence",
+                )
                 if st.button("Run predictions on all rows"):
-                    df_out = predict_quotes_df(df_in)
+                    df_out = predict_quotes_df(df_in, confidence=confidence_batch)
                     st.subheader("Output preview")
                     st.dataframe(df_out.head())
 
@@ -858,7 +870,7 @@ with tab_admin:
                                 df_master_new,
                                 target,
                                 models_dir="models",
-                                version="v1",
+                                version="v2",
                             )
                             if m:
                                 metrics_all.append(m)
