@@ -53,6 +53,10 @@ TOL_PCT = 0.10
 TOL_MIN_OP_HOURS = 5.0
 TOL_MIN_TOTAL_HOURS = 10.0
 
+# Supported confidence levels for prediction intervals (lo/hi bounds).
+CONFIDENCE_LEVELS = [0.80, 0.90, 0.95]
+DEFAULT_CONFIDENCE = 0.90
+
 # Numeric features that should be available (or reasonably estimable) at quote time.
 # These are the only numeric inputs the quote-time models are allowed to use.
 QUOTE_NUM_FEATURES = [

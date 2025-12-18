@@ -56,53 +56,37 @@ class QuoteInput(BaseModel):
 class OpPrediction(BaseModel):
     """Prediction output for a single operation."""
 
-    p50: float = Field(..., description="Median predicted hours")
-    p10: float = Field(..., description="Lower bound of calibrated 90% PI")
-    p90: float = Field(..., description="Upper bound of calibrated 90% PI")
-    std: float = Field(..., description="Std approximation from calibrated PI width")
-    rel_width: float = Field(..., description="(p90 - p10) / |p50|")
-    confidence: Optional[float] = Field(
-        None, description="Empirical probability of |error| within tolerance"
+    estimate: float = Field(..., description="Point prediction (median hours)")
+    lo: float = Field(..., description="Calibrated lower bound at selected confidence")
+    hi: float = Field(..., description="Calibrated upper bound at selected confidence")
+    plus_minus: float = Field(
+        ..., description="Half-width of calibrated interval (max side)"
     )
-    tol_hours: Optional[float] = Field(
-        None, description="Tolerance used for within-±T confidence"
-    )
+    confidence: float = Field(..., description="Selected confidence level (0-1)")
 
 
 class SalesBucketPrediction(BaseModel):
     """Aggregated prediction output for a Sales bucket."""
 
-    p50: float = Field(..., description="Median predicted hours across bucket")
-    p10: float = Field(..., description="Lower bound of calibrated 90% PI")
-    p90: float = Field(..., description="Upper bound of calibrated 90% PI")
-    rel_width: float = Field(..., description="(p90 - p10) / |p50|")
-    confidence: Optional[float] = Field(
-        None, description="Empirical probability of |error| within tolerance"
+    estimate: float = Field(..., description="Point prediction across bucket")
+    lo: float = Field(..., description="Calibrated lower bound for bucket")
+    hi: float = Field(..., description="Calibrated upper bound for bucket")
+    plus_minus: float = Field(
+        ..., description="Half-width of calibrated bucket interval"
     )
-    tol_hours: Optional[float] = Field(
-        None, description="Tolerance used for within-±T confidence"
-    )
+    confidence: float = Field(..., description="Selected confidence level (0-1)")
 
 
 class QuotePrediction(BaseModel):
     """All operation predictions plus project totals."""
 
     ops: Dict[str, OpPrediction]
-    total_p50: float
-    total_p10: float
-    total_p90: float
-    total_confidence: Optional[float] = Field(
-        None,
-        description="Conservative project-level probability of |error| within tolerance",
-    )
+    total_estimate: float
+    total_lo: float
+    total_hi: float
+    total_plus_minus: float
+    confidence: float = Field(..., description="Selected confidence level (0-1)")
     sales_buckets: Dict[str, SalesBucketPrediction] = Field(
         default_factory=dict,
         description="Rollups of operation predictions by Sales bucket",
-    )
-    tol_hours: Optional[float] = Field(
-        None, description="Tolerance used for total within-±T confidence"
-    )
-    within_tol_prob: Optional[float] = Field(
-        None,
-        description="Conservative held-out probability of |error| within tol_hours",
     )
