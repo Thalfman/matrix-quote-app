@@ -2,7 +2,7 @@
 # Model training + loading + interval predictions.
 
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, TypedDict, Union
 
 import joblib
 import numpy as np
@@ -18,6 +18,18 @@ from sklearn.preprocessing import OneHotEncoder
 
 from .config import TARGETS
 from .features import build_training_data
+
+DEFAULT_MODEL_VERSION = "v1"
+
+
+class CQRArtifact(TypedDict):
+    preprocessor: Any
+    model_lo: Any
+    model_mid: Any
+    model_hi: Any
+    alpha: float
+    qhat: float
+    meta: Dict[str, Any]
 
 
 def build_preprocessor(num_features, cat_features) -> ColumnTransformer:
@@ -44,11 +56,41 @@ def build_preprocessor(num_features, cat_features) -> ColumnTransformer:
     return pre
 
 
+def get_target_model_path(target: str, model_dir: str) -> str:
+    return os.path.join(
+        model_dir,
+        f"{target}_{DEFAULT_MODEL_VERSION}.joblib",
+    )
+
+
+def save_target_artifact(
+    target: str,
+    artifact: CQRArtifact,
+    model_dir: str,
+) -> None:
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = get_target_model_path(target, model_dir)
+    joblib.dump(artifact, model_path)
+
+
+def load_target_artifact(
+    target: str,
+    model_dir: str,
+) -> Optional[Union[CQRArtifact, Any]]:
+    model_path = get_target_model_path(target, model_dir)
+    if not os.path.exists(model_path):
+        return None
+    try:
+        return joblib.load(model_path)
+    except Exception:
+        return None
+
+
 def train_one_op(
     df_master: pd.DataFrame,
     target: str,
     models_dir: str = "models",
-    version: str = "v1",
+    version: str = DEFAULT_MODEL_VERSION,
 ) -> Optional[Dict]:
     """
     Train a RandomForest model for a single operation's actual hours.
@@ -123,7 +165,9 @@ def predict_with_interval(pipe: Pipeline, X_df: pd.DataFrame):
 
 
 def load_model(
-    target: str, version: str = "v1", models_dir: str = "models"
+    target: str,
+    version: str = DEFAULT_MODEL_VERSION,
+    models_dir: str = "models",
 ) -> Pipeline:
     """Load a persisted pipeline for a given operation."""
     model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
