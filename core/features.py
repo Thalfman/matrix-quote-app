@@ -6,8 +6,6 @@ import pandas as pd
 
 from .config import QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
 
-MISSING_TOKEN = "__MISSING__"
-
 # Columns that may be stored as "yes/no/true/false/0/1" but we want 0/1 ints.
 _BOOL_STR_COLS = [
     "has_controls",
@@ -93,16 +91,6 @@ def _compute_indices_inplace(df: pd.DataFrame) -> None:
     )
 
 
-def _prep_categoricals_inplace(df: pd.DataFrame) -> None:
-    """Ensure categorical columns are strings with a stable missing token."""
-    for col in QUOTE_CAT_FEATURES:
-        if col not in df.columns:
-            continue
-        df[col] = df[col].astype(str)
-        df[col] = df[col].replace(["nan", "NaN", "None", ""], MISSING_TOKEN)
-        df[col] = df[col].fillna(MISSING_TOKEN)
-
-
 def engineer_features_for_training(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare the project-hours dataset for training:
@@ -135,7 +123,6 @@ def engineer_features_for_training(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     _compute_indices_inplace(df)
-    _prep_categoricals_inplace(df)
 
     # If log cost is missing, derive it from quoted_materials_cost if possible.
     if (
@@ -175,7 +162,6 @@ def prepare_quote_features(df_quote: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     _compute_indices_inplace(df)
-    _prep_categoricals_inplace(df)
 
     if (
         "log_quoted_materials_cost" not in df.columns

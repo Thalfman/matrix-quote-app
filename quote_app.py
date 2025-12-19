@@ -9,9 +9,8 @@
 # - Admin: Upload & Train
 
 import os
-import math
+
 import pandas as pd
-import altair as alt
 import streamlit as st
 
 from core.config import (
@@ -19,7 +18,6 @@ from core.config import (
     QUOTE_CAT_FEATURES,
     TARGETS,
     REQUIRED_TRAINING_COLS,
-    SALES_BUCKETS,
 )
 from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
@@ -35,17 +33,6 @@ st.title("Matrix Quote App")
 
 if "models_ready" not in st.session_state:
     st.session_state["models_ready"] = False
-
-# If this is a new session but models/metrics already exist on disk,
-# mark models as ready so Single/Batch are usable without retraining.
-if not st.session_state["models_ready"]:
-    if os.path.exists(METRICS_PATH):
-        try:
-            _metrics = pd.read_csv(METRICS_PATH)
-            if not _metrics.empty:
-                st.session_state["models_ready"] = True
-        except Exception:
-            pass
 
 tabs = st.tabs(
     [
@@ -82,28 +69,6 @@ def _load_metrics():
     if os.path.exists(METRICS_PATH):
         return pd.read_csv(METRICS_PATH)
     return None
-
-
-def _reset_app_state():
-    """Delete master dataset, upload log, and model artifacts; reset models_ready."""
-    # Remove master dataset, upload log, and metrics file if present
-    for path in [MASTER_DATA_PATH, UPLOADS_LOG_PATH, METRICS_PATH]:
-        if os.path.exists(path):
-            os.remove(path)
-
-    # Remove joblib model files in models/
-    models_dir = "models"
-    if os.path.exists(models_dir) and os.path.isdir(models_dir):
-        for fname in os.listdir(models_dir):
-            if fname.endswith(".joblib"):
-                try:
-                    os.remove(os.path.join(models_dir, fname))
-                except OSError:
-                    # If a file can't be removed, just skip it
-                    pass
-
-    # Mark models as not ready so Single/Batch tabs show the correct warning
-    st.session_state["models_ready"] = False
 
 
 # Overview tab: high-level status
@@ -215,13 +180,8 @@ with tab_data:
             col_charts1, col_charts2 = st.columns(2)
 
             with col_charts1:
-                st.write(f"Hours by project for {op_choice}")
-                if "project_id" in df_filtered.columns:
-                    proj_df = df_filtered[["project_id", op_choice]].dropna()
-                    proj_df = proj_df.set_index("project_id")
-                    st.bar_chart(proj_df[op_choice])
-                else:
-                    st.info("No project_id column found to label projects.")
+                st.write(f"Histogram of {op_choice}")
+                st.bar_chart(df_filtered[op_choice].dropna())
 
             with col_charts2:
                 if "robot_count" in df_filtered.columns:
@@ -231,11 +191,8 @@ with tab_data:
                         columns={"robot_count": "robot_count", op_choice: "hours"}
                     )
                     st.scatter_chart(scatter_df, x="robot_count", y="hours")
-                else:
-                    st.info("No robot_count column found for scatter plot.")
         else:
             st.info("No operation hours columns found in master dataset.")
-
 
 
 # Model Performance tab: show per-op metrics
@@ -279,7 +236,7 @@ with tab_drivers:
             modeled_ops = [
                 t
                 for t in TARGETS
-                if os.path.exists(os.path.join("models", f"{t}_v2.joblib"))
+                if os.path.exists(os.path.join("models", f"{t}_v1.joblib"))
             ]
             if not modeled_ops:
                 st.info("No trained models found in ./models.")
@@ -288,9 +245,18 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
-                bundle = load_model(target_choice, version="v2")
-                feature_names = bundle.feature_names
-                importances = bundle.point_model.get_feature_importance()
+                pipe = load_model(target_choice)
+                pre = pipe.named_steps["preprocess"]
+                model = pipe.named_steps["model"]
+
+                try:
+                    feature_names = pre.get_feature_names_out()
+                except Exception:
+                    feature_names = [
+                        f"f_{i}" for i in range(len(model.feature_importances_))
+                    ]
+
+                importances = model.feature_importances_
                 fi_df = (
                     pd.DataFrame(
                         {"feature": feature_names, "importance": importances}
@@ -390,11 +356,11 @@ with tab_single:
         )
         system_category = st.selectbox(
             "System category",
-            ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
+            ["End of Line Automation", "Machine Tending", "Other"],
         )
         automation_level = st.selectbox(
             "Automation level",
-            ["Semi-Automatic", "Robotic", "Hard Automation"],
+            ["Semi-Automatic", "Robotic"],
         )
         plc_family = st.text_input("PLC family", "AB Compact Logix")
         hmi_family = st.text_input("HMI family", "AB PanelView Plus")
@@ -454,21 +420,11 @@ with tab_single:
         physical_scale_index = st.number_input(
             "Physical scale index (optional)", min_value=0.0
         )
-        estimated_materials_cost = st.number_input(
-            "Estimated materials cost", min_value=0.0
-        )
-        confidence = st.slider(
-            "Confidence (prediction interval coverage)",
-            min_value=0.80,
-            max_value=0.95,
-            value=0.90,
-            step=0.01,
+        log_quoted_materials_cost = st.number_input(
+            "log(1 + quoted materials cost)", min_value=0.0
         )
 
         if st.button("Estimate hours"):
-            conf_pct = int(round(confidence * 100))
-            log_cost = float(math.log1p(estimated_materials_cost))
-
             q = QuoteInput(
                 industry_segment=industry_segment,
                 system_category=system_category,
@@ -508,218 +464,52 @@ with tab_single:
                 mech_complexity_index=mech_complexity_index,
                 controls_complexity_index=controls_complexity_index,
                 physical_scale_index=physical_scale_index,
-                log_quoted_materials_cost=log_cost,
+                log_quoted_materials_cost=log_quoted_materials_cost,
             )
-            pred = predict_quote(q, confidence=confidence)
-
-            if pred.missing_models:
-                st.warning(
-                    "No trained model found for: " + ", ".join(sorted(pred.missing_models))
-                )
-
-            sales_rows = []
-            for bucket in SALES_BUCKETS:
-                bucket_pred = pred.sales_buckets.get(bucket)
-                if bucket_pred is None:
-                    continue
-                sales_rows.append(
-                    {
-                        "Sales bucket": bucket,
-                        "estimate_hours": bucket_pred.estimate,
-                        "low_hours": bucket_pred.low,
-                        "high_hours": bucket_pred.high,
-                        "confidence": bucket_pred.confidence,
-                    }
-                )
-
-            has_quoted_hours = False
-            quoted_hours_by_bucket = st.session_state.get("quoted_hours_by_bucket")
-            if isinstance(quoted_hours_by_bucket, dict) and quoted_hours_by_bucket:
-                has_quoted_hours = True
-
-            sales_summary_rows = []
-
-            for row in sales_rows:
-                role = row["Sales bucket"]
-                est = row["estimate_hours"]
-                low = row["low_hours"]
-                high = row["high_hours"]
-
-                summary_row = {
-                    "Role": role,
-                    "Recommended hours (estimate)": est,
-                    f"Range ({conf_pct}% PI)": f"{low:.1f}–{high:.1f}",
-                    "Confidence": f"{conf_pct}% (heuristic sum)",
-                }
-
-                if has_quoted_hours:
-                    quoted_val = quoted_hours_by_bucket.get(role)
-                    if quoted_val is not None:
-                        delta = quoted_val - est
-                        threshold = max(0.1 * abs(est), 5)
-                        if abs(delta) <= threshold:
-                            delta_status = "Close"
-                        elif delta > 0:
-                            delta_status = "Over model"
-                        else:
-                            delta_status = "Under model"
-
-                        summary_row.update(
-                            {
-                                "Quoted hours": quoted_val,
-                                "Delta (quoted - model)": delta,
-                                "Status": delta_status,
-                            }
-                        )
-                sales_summary_rows.append(summary_row)
-
-            total_model_hours = pred.total_estimate
-            project_cols = ["Model total (estimate)", f"Model range ({conf_pct}% PI)"]
-            project_values = [f"{total_model_hours:.1f} h", f"{pred.total_low:.1f}–{pred.total_high:.1f} h"]
-            project_status = None
-
-            if has_quoted_hours:
-                total_quoted = sum(
-                    v for v in quoted_hours_by_bucket.values() if isinstance(v, (int, float))
-                )
-                total_delta = total_quoted - total_model_hours
-                project_cols.extend(["Quoted total", "Delta (quoted - model)"])
-                project_values.extend([f"{total_quoted:.1f} h", f"{total_delta:.1f} h"])
-
-                threshold_total = max(0.1 * abs(total_model_hours), 10)
-                if abs(total_delta) <= threshold_total:
-                    project_status = "Overall close to model"
-                elif total_delta > 0:
-                    project_status = "Quoted hours above model"
-                else:
-                    project_status = "Quoted hours below model"
-
-            sales_summary_rows_exist = bool(sales_summary_rows)
-            df_sales_summary_sorted = None
-            if sales_summary_rows_exist:
-                df_sales_summary = pd.DataFrame(sales_summary_rows)
-                df_sales_summary_sorted = df_sales_summary.sort_values(
-                    "Recommended hours (estimate)", ascending=False
-                )
-
-                if has_quoted_hours:
-                    total_row = {
-                        "Role": "TOTAL",
-                        "Recommended hours (estimate)": df_sales_summary[
-                            "Recommended hours (estimate)"
-                        ].sum(),
-                        f"Range ({conf_pct}% PI)": "-",
-                        "Confidence": "-",
-                        "Quoted hours": df_sales_summary["Quoted hours"].sum(),
-                        "Delta (quoted - model)": df_sales_summary[
-                            "Delta (quoted - model)"
-                        ].sum(),
-                        "Status": "-",
-                    }
-                    df_sales_summary_sorted = pd.concat(
-                        [df_sales_summary_sorted, pd.DataFrame([total_row])], ignore_index=True
-                    )
+            pred = predict_quote(q)
 
             rows = []
             for op, op_pred in pred.ops.items():
                 rows.append(
                     {
                         "operation": op,
-                        "estimate_hours": op_pred.estimate,
-                        "low_hours": op_pred.low,
-                        "high_hours": op_pred.high,
-                        "calibration_rows": op_pred.calib_n,
+                        "p10_hours": op_pred.p10,
+                        "p50_hours": op_pred.p50,
+                        "p90_hours": op_pred.p90,
+                        "std_hours": op_pred.std,
+                        "rel_width": op_pred.rel_width,
+                        "confidence": op_pred.confidence,
                     }
                 )
             df_out = pd.DataFrame(rows)
+            st.subheader("Per-operation predictions")
+            st.dataframe(df_out)
 
-            sales_tab, ops_tab = st.tabs(["Sales view", "Operations view"])
-
-            with sales_tab:
-                st.subheader("Project summary")
-                cols = st.columns(len(project_cols))
-                for col, label, val in zip(cols, project_cols, project_values):
-                    col.metric(label, val)
-
-                if project_status:
-                    st.caption(project_status)
-
-                st.subheader("Sales-level summary")
-                if sales_summary_rows_exist and df_sales_summary_sorted is not None:
-                    display_cols = [
-                        "Role",
-                        "Recommended hours (estimate)",
-                        f"Range ({conf_pct}% PI)",
-                        "Confidence",
-                    ]
-                    if has_quoted_hours:
-                        display_cols += [
-                            "Quoted hours",
-                            "Delta (quoted - model)",
-                            "Status",
-                        ]
-                    st.dataframe(df_sales_summary_sorted[display_cols])
-
-                    if has_quoted_hours:
-                        df_chart = df_sales_summary_sorted[
-                            df_sales_summary_sorted["Role"] != "TOTAL"
-                        ][["Role", "Recommended hours (estimate)", "Quoted hours"]]
-                        if not df_chart.empty:
-                            chart_data = df_chart.melt(
-                                id_vars="Role",
-                                value_vars=["Recommended hours (estimate)", "Quoted hours"],
-                                var_name="Source",
-                                value_name="Hours",
-                            )
-                            chart = (
-                                alt.Chart(chart_data)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X("Role:N", sort="-y"),
-                                    y=alt.Y("Hours:Q"),
-                                    color="Source:N",
-                                    column=alt.Column("Source:N", header=alt.Header(title=None)),
-                                    tooltip=["Role", "Source", "Hours"],
-                                )
-                                .resolve_scale(y="shared")
-                            )
-                            st.altair_chart(chart, use_container_width=True)
-                else:
-                    st.info("No Sales-level rollup available for this quote.")
-
-            with ops_tab:
-                st.subheader("Per-operation predictions")
-                st.dataframe(df_out)
+            st.subheader("Project totals")
+            st.write(
+                f"P10: {pred.total_p10:.1f} h, "
+                f"P50: {pred.total_p50:.1f} h, "
+                f"P90: {pred.total_p90:.1f} h"
+            )
 
 
 # Batch Quotes tab
 with tab_batch:
-    st.header("Batch estimation via CSV or Excel")
+    st.header("Batch estimation via CSV")
 
     if not st.session_state["models_ready"]:
         st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
     else:
         st.markdown(
-            "Your file must include at least these columns: "
+            "Your CSV must include at least these columns: "
             f"`{', '.join(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)}`"
         )
 
         uploaded = st.file_uploader(
-            "Upload quote file (CSV or Excel)",
-            type=["csv", "xlsx", "xls"],
-            key="batch_uploader",
+            "Upload quote CSV", type=["csv"], key="batch_uploader"
         )
         if uploaded is not None:
-            name = uploaded.name.lower()
-            if name.endswith(".csv"):
-                df_in = pd.read_csv(uploaded)
-            else:
-                xls = pd.ExcelFile(uploaded)
-                sheet_name = st.selectbox(
-                    "Select sheet for quote inputs", xls.sheet_names, key="batch_sheet"
-                )
-                df_in = pd.read_excel(xls, sheet_name=sheet_name)
-
+            df_in = pd.read_csv(uploaded)
             st.subheader("Input preview")
             st.dataframe(df_in.head())
 
@@ -729,16 +519,8 @@ with tab_batch:
             if missing:
                 st.error(f"Missing required columns: {missing}")
             else:
-                confidence_batch = st.slider(
-                    "Confidence (prediction interval coverage)",
-                    min_value=0.80,
-                    max_value=0.95,
-                    value=0.90,
-                    step=0.01,
-                    key="batch_confidence",
-                )
                 if st.button("Run predictions on all rows"):
-                    df_out = predict_quotes_df(df_in, confidence=confidence_batch)
+                    df_out = predict_quotes_df(df_in)
                     st.subheader("Output preview")
                     st.dataframe(df_out.head())
 
@@ -756,12 +538,12 @@ with tab_admin:
     st.header("Admin: Upload dataset and train models")
 
     st.markdown(
-        "Upload the latest project_hours_dataset Excel export. "
+        "Upload the latest project_hours_dataset.xlsx export. "
         "The app will merge it into a master dataset (dedup by project_id) and retrain models."
     )
 
     uploaded_file = st.file_uploader(
-        "Upload project dataset (Excel)",
+        "Upload project_hours_dataset.xlsx",
         type=["xlsx", "xls"],
         key="training_uploader",
     )
@@ -870,7 +652,7 @@ with tab_admin:
                                 df_master_new,
                                 target,
                                 models_dir="models",
-                                version="v2",
+                                version="v1",
                             )
                             if m:
                                 metrics_all.append(m)
@@ -897,24 +679,10 @@ with tab_admin:
                                 file_name="metrics_summary.csv",
                                 mime="text/csv",
                             )
-
-                            # Force a rerun so other tabs see the new master/models
-                            st.rerun()
                         else:
                             st.warning(
                                 "No models were trained (not enough data for any operation). "
                                 "Check that actual-hours columns have non-zero values."
                             )
     else:
-        st.info("Upload your project dataset (Excel) to enable training.")
-
-    st.markdown("---")
-    st.subheader("Reset app state")
-
-    if st.button("Reset master dataset and models"):
-        _reset_app_state()
-        st.success(
-            "Master dataset, upload log, and model artifacts have been cleared. "
-            "The app is now in a blank state."
-        )
-        st.rerun()
+        st.info("Upload your project_hours_dataset.xlsx to enable training.")

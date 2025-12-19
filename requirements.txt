@@ -4,8 +4,5 @@ scikit-learn
 pydantic
 joblib
 streamlit
-altair
 openpyxl
 pyarrow
-
-catboost
