@@ -96,7 +96,11 @@ def main():
                 st.metric("Operations with models", "0")
 
         with col3:
-            if metrics_df is not None and not metrics_df.empty:
+            if (
+                metrics_df is not None
+                and not metrics_df.empty
+                and "mae" in metrics_df.columns
+            ):
                 avg_mae = metrics_df["mae"].mean()
                 st.metric("Average MAE (hours)", f"{avg_mae:.1f}")
             else:
