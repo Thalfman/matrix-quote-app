@@ -22,6 +22,7 @@ from core.config import (  # noqa: E402
     REQUIRED_TRAINING_COLS,
     TARGETS,
 )
+from core import cqr  # noqa: E402,F401
 from core.features import engineer_features_for_training  # noqa: E402
 from core.models import train_one_op  # noqa: E402
 from core.schemas import QuoteInput  # noqa: E402
