@@ -1,25 +1,14 @@
 # service/predict_lib.py
 # Small library that exposes prediction functions for single and batch inputs.
 
-from typing import Dict, List
+from typing import Dict
 
 import pandas as pd
 
-from core.config import (
-    TARGETS,
-    QUOTE_NUM_FEATURES,
-    QUOTE_CAT_FEATURES,
-    SALES_BUCKETS,
-    SALES_BUCKET_MAP,
-)
+from core.config import TARGETS, QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
 from core.features import prepare_quote_features
-from core.models import load_model, predict_with_conformal_interval, CQRModelBundle
-from core.schemas import (
-    QuoteInput,
-    QuotePrediction,
-    OpPrediction,
-    SalesBucketPrediction,
-)
+from core.models import load_model, predict_with_interval
+from core.schemas import QuoteInput, QuotePrediction, OpPrediction
 
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
@@ -32,111 +21,91 @@ def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     return df
 
 
-def predict_quote(q: QuoteInput, confidence: float = 0.90) -> QuotePrediction:
+def _compute_confidence(p10: float, p50: float, p90: float):
+    """
+    Derive a heuristic confidence from the relative width of the interval.
+    Smaller (p90 - p10) / |p50| => higher confidence.
+    """
+    eps = 1e-6
+    width = p90 - p10
+    denom = max(abs(p50), eps)
+    rel_width = width / denom
+
+    if rel_width < 0.3:
+        label = "high"
+    elif rel_width < 0.6:
+        label = "medium"
+    else:
+        label = "low"
+
+    return rel_width, label
+
+
+def predict_quote(q: QuoteInput) -> QuotePrediction:
     """
     Predict hours for a single project described by QuoteInput.
-    Returns per-operation conformal intervals plus totals.
+    Returns per-operation P10/P50/P90/std/confidence plus totals.
     """
     df = _quote_to_df(q)
 
     ops: Dict[str, OpPrediction] = {}
-    bucket_totals = {bucket: {"estimate": 0.0, "low": 0.0, "high": 0.0} for bucket in SALES_BUCKETS}
-    total_estimate = total_low = total_high = 0.0
-    missing_models: List[str] = []
+    total_p50 = total_p10 = total_p90 = 0.0
 
     for target in TARGETS:
+        pipe = load_model(target)
+        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
+
+        p50 = float(p50_arr[0])
+        p10 = float(p10_arr[0])
+        p90 = float(p90_arr[0])
+        std = float(std_arr[0])
+        rel_width, conf_label = _compute_confidence(p10, p50, p90)
+
         op_name = target.replace("_actual_hours", "")
-        try:
-            bundle: CQRModelBundle = load_model(target, version="v2")
-        except FileNotFoundError:
-            missing_models.append(op_name)
-            bundle = None
-
-        if bundle is None:
-            estimate = low = high = 0.0
-            calib_n = 0
-        else:
-            estimate_arr, low_arr, high_arr = predict_with_conformal_interval(
-                bundle, df, confidence=confidence
-            )
-            estimate = float(estimate_arr[0])
-            low = float(low_arr[0])
-            high = float(high_arr[0])
-            calib_n = int(bundle.calib_n)
-
         ops[op_name] = OpPrediction(
-            estimate=estimate,
-            low=low,
-            high=high,
-            confidence=confidence,
-            calib_n=calib_n,
+            p50=p50,
+            p10=p10,
+            p90=p90,
+            std=std,
+            rel_width=rel_width,
+            confidence=conf_label,
         )
 
-        bucket = SALES_BUCKET_MAP.get(op_name)
-        if bucket in bucket_totals:
-            bucket_totals[bucket]["estimate"] += estimate
-            bucket_totals[bucket]["low"] += low
-            bucket_totals[bucket]["high"] += high
-
-        total_estimate += estimate
-        total_low += low
-        total_high += high
-
-    sales_buckets: Dict[str, SalesBucketPrediction] = {}
-    for bucket in SALES_BUCKETS:
-        totals = bucket_totals.get(bucket, {"estimate": 0.0, "low": 0.0, "high": 0.0})
-        sales_buckets[bucket] = SalesBucketPrediction(
-            estimate=float(totals["estimate"]),
-            low=float(totals["low"]),
-            high=float(totals["high"]),
-            confidence=confidence,
-        )
+        total_p50 += p50
+        total_p10 += p10
+        total_p90 += p90
 
     return QuotePrediction(
         ops=ops,
-        total_estimate=float(total_estimate),
-        total_low=float(total_low),
-        total_high=float(total_high),
-        confidence=confidence,
-        sales_buckets=sales_buckets,
-        missing_models=missing_models,
+        total_p50=float(total_p50),
+        total_p10=float(total_p10),
+        total_p90=float(total_p90),
     )
 
 
-def predict_quotes_df(df_in: pd.DataFrame, confidence: float = 0.90) -> pd.DataFrame:
+def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
     """
     Batch prediction for a DataFrame with quote-time columns.
-    Adds per-operation estimate/low/high and project totals.
+    Adds per-operation P10/P50/P90/std and project totals.
     """
     df = prepare_quote_features(df_in)
 
+    df["total_p50"] = 0.0
+    df["total_p10"] = 0.0
+    df["total_p90"] = 0.0
+
     for target in TARGETS:
+        pipe = load_model(target)
+        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
+
         op_name = target.replace("_actual_hours", "")
-        try:
-            bundle: CQRModelBundle = load_model(target, version="v2")
-        except FileNotFoundError:
-            bundle = None
+        df[f"{op_name}_p50"] = p50_arr
+        df[f"{op_name}_p10"] = p10_arr
+        df[f"{op_name}_p90"] = p90_arr
+        df[f"{op_name}_std"] = std_arr
 
-        if bundle is None:
-            estimate_arr = [0.0] * len(df)
-            low_arr = [0.0] * len(df)
-            high_arr = [0.0] * len(df)
-        else:
-            estimate_arr, low_arr, high_arr = predict_with_conformal_interval(
-                bundle, df, confidence=confidence
-            )
-
-        df[f"{op_name}_estimate"] = estimate_arr
-        df[f"{op_name}_low"] = low_arr
-        df[f"{op_name}_high"] = high_arr
-
-    op_cols_est = [f"{target.replace('_actual_hours', '')}_estimate" for target in TARGETS]
-    op_cols_low = [f"{target.replace('_actual_hours', '')}_low" for target in TARGETS]
-    op_cols_high = [f"{target.replace('_actual_hours', '')}_high" for target in TARGETS]
-
-    df["total_estimate"] = df[op_cols_est].sum(axis=1)
-    df["total_low"] = df[op_cols_low].sum(axis=1)
-    df["total_high"] = df[op_cols_high].sum(axis=1)
-    df["confidence"] = confidence
+        df["total_p50"] += p50_arr
+        df["total_p10"] += p10_arr
+        df["total_p90"] += p90_arr
 
     return df

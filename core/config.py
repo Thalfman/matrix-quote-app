@@ -17,37 +17,6 @@ TARGETS = [
     "pm200_actual_hours",
 ]
 
-# Fixed Sales buckets used to roll up operation-level predictions for a quote.
-SALES_BUCKETS = [
-    "ME",
-    "EE",
-    "PM",
-    "Docs",
-    "Build",
-    "Robot",
-    "Controls",
-    "Install",
-    "Travel",
-]
-
-# Mapping of operation identifiers (as used in TARGETS, without the
-# ``_actual_hours`` suffix) to a single Sales bucket. Each operation must map to
-# exactly one bucket; update this mapping if new operations are introduced.
-SALES_BUCKET_MAP = {
-    "me10": "ME",
-    "me15": "ME",
-    "me230": "ME",
-    "ee20": "EE",
-    "rb30": "Robot",
-    "cp50": "Controls",
-    "bld100": "Build",
-    "shp150": "Build",
-    "inst160": "Install",
-    "trv180": "Travel",
-    "doc190": "Docs",
-    "pm200": "PM",
-}
-
 # Numeric features that should be available (or reasonably estimable) at quote time.
 # These are the only numeric inputs the quote-time models are allowed to use.
 QUOTE_NUM_FEATURES = [

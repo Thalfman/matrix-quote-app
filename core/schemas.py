@@ -1,7 +1,7 @@
 # core/schemas.py
 # Pydantic models for structured inputs/outputs.
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -56,35 +56,18 @@ class QuoteInput(BaseModel):
 class OpPrediction(BaseModel):
     """Prediction output for a single operation."""
 
-    estimate: float = Field(..., description="Point prediction for hours")
-    low: float = Field(..., description="Lower bound of conformal PI")
-    high: float = Field(..., description="Upper bound of conformal PI")
-    confidence: float = Field(..., description="Requested prediction interval coverage")
-    calib_n: int = Field(..., description="Calibration rows used to build conformal scores")
-
-
-class SalesBucketPrediction(BaseModel):
-    """Aggregated prediction output for a Sales bucket (heuristic sum)."""
-
-    estimate: float = Field(..., description="Summed point estimates across bucket")
-    low: float = Field(..., description="Summed lower bounds (heuristic)")
-    high: float = Field(..., description="Summed upper bounds (heuristic)")
-    confidence: float = Field(..., description="Requested coverage passed through")
+    p50: float = Field(..., description="Median predicted hours")
+    p10: float = Field(..., description="Lower bound (10th percentile)")
+    p90: float = Field(..., description="Upper bound (90th percentile)")
+    std: float = Field(..., description="Std dev across trees")
+    rel_width: float = Field(..., description="(p90 - p10) / |p50|")
+    confidence: str = Field(..., description="'high' | 'medium' | 'low'")
 
 
 class QuotePrediction(BaseModel):
     """All operation predictions plus project totals."""
 
     ops: Dict[str, OpPrediction]
-    total_estimate: float
-    total_low: float
-    total_high: float
-    confidence: float
-    sales_buckets: Dict[str, SalesBucketPrediction] = Field(
-        default_factory=dict,
-        description="Rollups of operation predictions by Sales bucket (heuristic sums)",
-    )
-    missing_models: List[str] = Field(
-        default_factory=list,
-        description="Operations with no trained model available",
-    )
+    total_p50: float
+    total_p10: float
+    total_p90: float
