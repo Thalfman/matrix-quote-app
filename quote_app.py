@@ -1213,6 +1213,45 @@ def main():
         else:
             st.info("Upload your project_hours_dataset.xlsx to enable training.")
 
+        st.markdown("---")
+        st.subheader("Reset app state")
+        confirm_reset = st.checkbox(
+            "I understand this will delete the master dataset and trained models."
+        )
+
+        if not confirm_reset:
+            st.info("Check the confirmation box to enable reset.")
+
+        if st.button(
+            "Reset master dataset and models",
+            disabled=not confirm_reset,
+        ):
+            paths_to_remove = [
+                MASTER_DATA_PATH,
+                UPLOADS_LOG_PATH,
+                METRICS_PATH,
+            ]
+            for path in paths_to_remove:
+                if os.path.exists(path):
+                    os.remove(path)
+
+            for target in TARGETS:
+                model_path = os.path.join("models", f"{target}_v1.joblib")
+                if os.path.exists(model_path):
+                    os.remove(model_path)
+
+            for directory in [
+                os.path.dirname(MASTER_DATA_PATH),
+                os.path.dirname(UPLOADS_LOG_PATH),
+                "models",
+            ]:
+                if os.path.isdir(directory) and not os.listdir(directory):
+                    os.rmdir(directory)
+
+            st.session_state["models_ready"] = False
+            st.success("App state reset. Upload a dataset to train models again.")
+            _rerun_app()
+
 
 if __name__ == "__main__":
     main()
