@@ -8,6 +8,7 @@
 # - Batch Quotes
 # - Admin: Upload & Train
 
+import math
 import os
 
 import pandas as pd
@@ -60,6 +61,44 @@ LABELS = {
 }
 LABEL_TYPICAL_MISS = LABELS["typical_miss"]
 LABEL_RANGE_RELIABILITY = LABELS["range_reliability"]
+
+SINGLE_QUOTE_HELP = {
+    "industry_segment": "Customer industry category. Choose the closest match.",
+    "system_category": "Type of system being built (ex: end-of-line, tending, other).",
+    "automation_level": "How automated the system is. Choose Robotic if robots do the work.",
+    "plc_family": "PLC platform expected (used to align with similar historical projects).",
+    "hmi_family": "HMI platform expected (used to align with similar historical projects).",
+    "vision_type": "Vision approach (none / 2D / 3D).",
+    "stations_count": "Approx number of stations or cells in the system.",
+    "robot_count": "Number of robots included in the scope.",
+    "fixture_sets": "How many unique fixture sets are needed.",
+    "part_types": "How many different part types the system must handle.",
+    "servo_axes": "Count of servo-controlled axes (excluding robots).",
+    "pneumatic_devices": "Approx count of pneumatic actuators/devices.",
+    "safety_doors": "Count of safety gates/doors.",
+    "weldment_perimeter_ft": "Approx weldment perimeter in feet (rough estimate is fine).",
+    "fence_length_ft": "Approx total safety fence/guarding length in feet.",
+    "conveyor_length_ft": "Approx total conveyor length in feet.",
+    "product_familiarity_score": "How familiar the team is with the product (1=new, 5=very familiar).",
+    "product_rigidity": "How rigid the product is (1=flexible, 5=rigid).",
+    "is_product_deformable": "Check if the product can deform during handling (bags, soft packaging).",
+    "is_bulk_product": "Check if the process handles bulk/loose product.",
+    "bulk_rigidity_score": "Rigidity of bulk material (1=loose, 5=rigid).",
+    "has_tricky_packaging": "Check if packaging is difficult to handle or stabilize.",
+    "process_uncertainty_score": "How uncertain the process is (1=known, 5=experimental).",
+    "changeover_time_min": "Expected changeover time between products/parts (minutes).",
+    "safety_devices_count": "Count of safety devices (light curtains, scanners, E-stops, etc.).",
+    "custom_pct": "Percent of the system that is custom vs repeatable.",
+    "duplicate": "Check if this is very similar to a previous project.",
+    "has_controls": "Controls/PLC/HMI work is included in the quote.",
+    "has_robotics": "Robotics integration/programming is included in the quote.",
+    "retrofit": "Check if modifying an existing system (vs new build).",
+    "complexity_score_1_5": "Overall complexity (1=straightforward, 5=high complexity).",
+    "vision_systems_count": "Number of vision systems/cameras.",
+    "panel_count": "Number of electrical panels.",
+    "drive_count": "Number of drives (VFD/servo drives).",
+    "quoted_materials_cost_usd": "Approx materials/equipment cost being quoted. Use 0 if unknown.",
+}
 
 
 def fmt_hours(x) -> str:
@@ -570,81 +609,210 @@ def main():
         if not st.session_state["models_ready"]:
             st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
         else:
-            industry_segment = st.selectbox(
-                "Industry segment",
-                ["Automotive", "Food & Beverage", "General Industry"],
-            )
-            system_category = st.selectbox(
-                "System category",
-                ["End of Line Automation", "Machine Tending", "Other"],
-            )
-            automation_level = st.selectbox(
-                "Automation level",
-                ["Semi-Automatic", "Robotic"],
-            )
-            plc_family = st.text_input("PLC family", "AB Compact Logix")
-            hmi_family = st.text_input("HMI family", "AB PanelView Plus")
-            vision_type = st.text_input("Vision type", "None")
+            with st.form("single_quote_form"):
+                st.subheader("Core inputs")
+                industry_segment = st.selectbox(
+                    "Industry segment",
+                    ["Automotive", "Food & Beverage", "General Industry"],
+                    help=SINGLE_QUOTE_HELP["industry_segment"],
+                )
+                system_category = st.selectbox(
+                    "System category",
+                    ["End of Line Automation", "Machine Tending", "Other"],
+                    help=SINGLE_QUOTE_HELP["system_category"],
+                )
+                automation_level = st.selectbox(
+                    "Automation level",
+                    ["Semi-Automatic", "Robotic"],
+                    help=SINGLE_QUOTE_HELP["automation_level"],
+                )
+                stations_count = st.number_input(
+                    "Stations count",
+                    min_value=0,
+                    step=1,
+                    help=SINGLE_QUOTE_HELP["stations_count"],
+                )
+                robot_count = st.number_input(
+                    "Robot count",
+                    min_value=0,
+                    step=1,
+                    help=SINGLE_QUOTE_HELP["robot_count"],
+                )
+                complexity_score_1_5 = st.slider(
+                    "Overall complexity (1–5)",
+                    1,
+                    5,
+                    3,
+                    help=SINGLE_QUOTE_HELP["complexity_score_1_5"],
+                )
+                custom_pct = st.slider(
+                    "Custom %",
+                    0,
+                    100,
+                    50,
+                    help=SINGLE_QUOTE_HELP["custom_pct"],
+                )
+                has_controls = st.checkbox(
+                    "Includes controls work?",
+                    value=True,
+                    help=SINGLE_QUOTE_HELP["has_controls"],
+                )
+                has_robotics = st.checkbox(
+                    "Includes robotics work?",
+                    value=True,
+                    help=SINGLE_QUOTE_HELP["has_robotics"],
+                )
+                retrofit = st.checkbox(
+                    "Retrofit project?", help=SINGLE_QUOTE_HELP["retrofit"]
+                )
 
-            stations_count = st.number_input("Stations count", min_value=0, step=1)
-            robot_count = st.number_input("Robot count", min_value=0, step=1)
-            fixture_sets = st.number_input("Fixture sets", min_value=0, step=1)
-            part_types = st.number_input("Part types", min_value=0, step=1)
-            servo_axes = st.number_input("Servo axes", min_value=0, step=1)
-            pneumatic_devices = st.number_input("Pneumatic devices", min_value=0, step=1)
-            safety_doors = st.number_input("Safety doors", min_value=0, step=1)
-            weldment_perimeter_ft = st.number_input(
-                "Weldment perimeter (ft)", min_value=0.0
-            )
-            fence_length_ft = st.number_input("Fence length (ft)", min_value=0.0)
-            conveyor_length_ft = st.number_input("Conveyor length (ft)", min_value=0.0)
-            product_familiarity_score = st.slider(
-                "Product familiarity (1–5)", 1, 5, 3
-            )
-            product_rigidity = st.slider("Product rigidity (1–5)", 1, 5, 3)
-            is_product_deformable = st.checkbox("Product deformable?")
-            is_bulk_product = st.checkbox("Bulk product?")
-            bulk_rigidity_score = st.slider("Bulk rigidity score (1–5)", 1, 5, 3)
-            has_tricky_packaging = st.checkbox("Tricky packaging?")
-            process_uncertainty_score = st.slider(
-                "Process uncertainty (1–5)", 1, 5, 3
-            )
-            changeover_time_min = st.number_input(
-                "Changeover time (min)", min_value=0.0
-            )
-            safety_devices_count = st.number_input(
-                "Safety devices count", min_value=0, step=1
-            )
-            custom_pct = st.slider("Custom %", 0, 100, 50)
-            duplicate = st.checkbox("Duplicate of prior project?")
-            has_controls = st.checkbox("Includes controls work?", value=True)
-            has_robotics = st.checkbox("Includes robotics work?", value=True)
-            retrofit = st.checkbox("Retrofit project?")
-            complexity_score_1_5 = st.slider(
-                "Overall complexity (1–5)", 1, 5, 3
-            )
-            vision_systems_count = st.number_input(
-                "Vision systems count", min_value=0, step=1
-            )
-            panel_count = st.number_input("Panel count", min_value=0, step=1)
-            drive_count = st.number_input("Drive count", min_value=0, step=1)
-            stations_robot_index = st.number_input(
-                "Stations/Robot index (optional)", min_value=0.0
-            )
-            mech_complexity_index = st.number_input(
-                "Mechanical complexity index (optional)", min_value=0.0
-            )
-            controls_complexity_index = st.number_input(
-                "Controls complexity index (optional)", min_value=0.0
-            )
-            physical_scale_index = st.number_input(
-                "Physical scale index (optional)", min_value=0.0
-            )
-            log_quoted_materials_cost = st.number_input(
-                "log(1 + quoted materials cost)", min_value=0.0
-            )
+                with st.expander(
+                    "Optional inputs (only if known)", expanded=False
+                ):
+                    plc_family = st.text_input(
+                        "PLC family",
+                        "AB Compact Logix",
+                        help=SINGLE_QUOTE_HELP["plc_family"],
+                    )
+                    hmi_family = st.text_input(
+                        "HMI family",
+                        "AB PanelView Plus",
+                        help=SINGLE_QUOTE_HELP["hmi_family"],
+                    )
+                    vision_type = st.text_input(
+                        "Vision type",
+                        "None",
+                        help=SINGLE_QUOTE_HELP["vision_type"],
+                    )
+                    fixture_sets = st.number_input(
+                        "Fixture sets",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["fixture_sets"],
+                    )
+                    part_types = st.number_input(
+                        "Part types",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["part_types"],
+                    )
+                    servo_axes = st.number_input(
+                        "Servo axes",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["servo_axes"],
+                    )
+                    pneumatic_devices = st.number_input(
+                        "Pneumatic devices",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["pneumatic_devices"],
+                    )
+                    safety_doors = st.number_input(
+                        "Safety doors",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["safety_doors"],
+                    )
+                    weldment_perimeter_ft = st.number_input(
+                        "Weldment perimeter (ft)",
+                        min_value=0.0,
+                        help=SINGLE_QUOTE_HELP["weldment_perimeter_ft"],
+                    )
+                    fence_length_ft = st.number_input(
+                        "Fence length (ft)",
+                        min_value=0.0,
+                        help=SINGLE_QUOTE_HELP["fence_length_ft"],
+                    )
+                    conveyor_length_ft = st.number_input(
+                        "Conveyor length (ft)",
+                        min_value=0.0,
+                        help=SINGLE_QUOTE_HELP["conveyor_length_ft"],
+                    )
+                    product_familiarity_score = st.slider(
+                        "Product familiarity (1–5)",
+                        1,
+                        5,
+                        3,
+                        help=SINGLE_QUOTE_HELP["product_familiarity_score"],
+                    )
+                    product_rigidity = st.slider(
+                        "Product rigidity (1–5)",
+                        1,
+                        5,
+                        3,
+                        help=SINGLE_QUOTE_HELP["product_rigidity"],
+                    )
+                    is_product_deformable = st.checkbox(
+                        "Product deformable?",
+                        help=SINGLE_QUOTE_HELP["is_product_deformable"],
+                    )
+                    is_bulk_product = st.checkbox(
+                        "Bulk product?",
+                        help=SINGLE_QUOTE_HELP["is_bulk_product"],
+                    )
+                    bulk_rigidity_score = st.slider(
+                        "Bulk rigidity score (1–5)",
+                        1,
+                        5,
+                        3,
+                        help=SINGLE_QUOTE_HELP["bulk_rigidity_score"],
+                    )
+                    has_tricky_packaging = st.checkbox(
+                        "Tricky packaging?",
+                        help=SINGLE_QUOTE_HELP["has_tricky_packaging"],
+                    )
+                    process_uncertainty_score = st.slider(
+                        "Process uncertainty (1–5)",
+                        1,
+                        5,
+                        3,
+                        help=SINGLE_QUOTE_HELP["process_uncertainty_score"],
+                    )
+                    changeover_time_min = st.number_input(
+                        "Changeover time (min)",
+                        min_value=0.0,
+                        help=SINGLE_QUOTE_HELP["changeover_time_min"],
+                    )
+                    safety_devices_count = st.number_input(
+                        "Safety devices count",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["safety_devices_count"],
+                    )
+                    duplicate = st.checkbox(
+                        "Duplicate of prior project?",
+                        help=SINGLE_QUOTE_HELP["duplicate"],
+                    )
+                    vision_systems_count = st.number_input(
+                        "Vision systems count",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["vision_systems_count"],
+                    )
+                    panel_count = st.number_input(
+                        "Panel count",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["panel_count"],
+                    )
+                    drive_count = st.number_input(
+                        "Drive count",
+                        min_value=0,
+                        step=1,
+                        help=SINGLE_QUOTE_HELP["drive_count"],
+                    )
+                    quoted_materials_cost_usd = st.number_input(
+                        "Quoted materials cost ($)",
+                        min_value=0.0,
+                        help=SINGLE_QUOTE_HELP["quoted_materials_cost_usd"],
+                    )
 
-            if st.button("Estimate hours"):
+                submitted = st.form_submit_button("Estimate hours")
+
+            log_quoted_materials_cost = math.log1p(quoted_materials_cost_usd)
+
+            if submitted:
                 q = QuoteInput(
                     industry_segment=industry_segment,
                     system_category=system_category,
@@ -680,10 +848,6 @@ def main():
                     vision_systems_count=vision_systems_count,
                     panel_count=panel_count,
                     drive_count=drive_count,
-                    stations_robot_index=stations_robot_index,
-                    mech_complexity_index=mech_complexity_index,
-                    controls_complexity_index=controls_complexity_index,
-                    physical_scale_index=physical_scale_index,
                     log_quoted_materials_cost=log_quoted_materials_cost,
                 )
                 pred = predict_quote(q)
