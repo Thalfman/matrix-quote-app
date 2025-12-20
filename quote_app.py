@@ -852,40 +852,39 @@ def main():
                 )
                 pred = predict_quote(q)
 
-                rows = []
-                interval_lines = []
-                for op, op_pred in pred.ops.items():
-                    rows.append(
-                        {
-                            "operation": op,
-                            "p10_hours": op_pred.p10,
-                            "p50_hours": op_pred.p50,
-                            "p90_hours": op_pred.p90,
-                            "std_hours": op_pred.std,
-                            "rel_width": op_pred.rel_width,
-                            "confidence_pct": op_pred.confidence_pct,
-                            "confidence": op_pred.confidence,
-                        }
-                    )
-                    if op_pred.trained:
-                        interval_lines.append(
-                            f"**{op}**: 90% confident the true hours are between "
-                            f"{op_pred.p10:.1f} and {op_pred.p90:.1f}."
-                        )
-                    else:
-                        interval_lines.append(f"**{op}**: Not trained.")
-                df_out = pd.DataFrame(rows)
-                st.subheader("Per-operation predictions")
-                st.dataframe(df_out)
-                if interval_lines:
-                    st.caption("\n".join(f"- {line}" for line in interval_lines))
-
-                st.subheader("Project totals")
-                st.write(
-                    f"P10: {pred.total_p10:.1f} h, "
-                    f"P50: {pred.total_p50:.1f} h, "
-                    f"P90: {pred.total_p90:.1f} h"
+                st.subheader("Quote Summary")
+                summary_cols = st.columns(3)
+                summary_cols[0].metric(
+                    "Estimate (hours)", fmt_hours(pred.total_p50)
                 )
+                summary_cols[1].metric(
+                    "Likely range (hours)",
+                    fmt_range(pred.total_p10, pred.total_p90),
+                )
+                summary_cols[2].metric(
+                    "Suggested buffer (hours)",
+                    fmt_hours(compute_buffer(pred.total_p50, pred.total_p90)),
+                )
+
+                st.subheader("Bucket breakdown")
+                bucket_summary = build_bucket_summary(pred.ops)
+                st.dataframe(bucket_summary, use_container_width=True)
+
+                with st.expander("Detailed breakdown", expanded=False):
+                    rows = []
+                    for op, op_pred in pred.ops.items():
+                        rows.append(
+                            {
+                                "Operation": op,
+                                "Bucket": bucket_for_op(op),
+                                "Low": op_pred.p10,
+                                "Estimate": op_pred.p50,
+                                "High": op_pred.p90,
+                                "Trained": op_pred.trained,
+                            }
+                        )
+                    df_out = pd.DataFrame(rows)
+                    st.dataframe(df_out, use_container_width=True)
 
 
     # Batch Quotes tab
