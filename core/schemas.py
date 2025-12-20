@@ -61,6 +61,12 @@ class OpPrediction(BaseModel):
     p90: float = Field(..., description="Upper bound (90th percentile)")
     std: float = Field(..., description="Std dev across trees")
     rel_width: float = Field(..., description="(p90 - p10) / |p50|")
+    trained: bool = Field(
+        True, description="Whether a trained model produced this prediction"
+    )
+    confidence_pct: Optional[float] = Field(
+        None, description="Numeric confidence percent, when available"
+    )
     confidence: str = Field(
         ..., description="'90% calibrated' | 'not trained'"
     )
