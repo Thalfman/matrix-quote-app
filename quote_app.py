@@ -241,7 +241,7 @@ def main():
 
     # Model Performance tab: show per-op metrics
     if page == "Model Health":
-        st.header("Model Health")
+        st.header("Model Performance")
 
         metrics_df = _load_metrics()
         if metrics_df is None or metrics_df.empty:
