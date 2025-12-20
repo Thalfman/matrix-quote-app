@@ -79,31 +79,22 @@ def main():
     if not st.session_state.get("models_ready", False):
         st.session_state["models_ready"] = _models_ready_from_disk()
 
-    tabs = st.tabs(
+    admin_mode = st.sidebar.checkbox("Admin mode", value=False)
+    pages = ["Quote", "Batch Quotes"] + (
         [
             "Overview",
             "Data Explorer",
-            "Model Performance",
-            "Drivers & Similar Projects",
-            "Single Quote",
-            "Batch Quotes",
+            "Model Health",
+            "Drivers & Similar",
             "Admin: Upload & Train",
         ]
+        if admin_mode
+        else []
     )
-
-    (
-        tab_overview,
-        tab_data,
-        tab_perf,
-        tab_drivers,
-        tab_single,
-        tab_batch,
-        tab_admin,
-    ) = tabs
-
+    page = st.sidebar.radio("Navigate", pages)
 
     # Overview tab: high-level status
-    with tab_overview:
+    if page == "Overview":
         st.header("Overview")
 
         df_master = _load_master()
@@ -162,7 +153,7 @@ def main():
                 )
 
     # Data Explorer tab: explore master dataset
-    with tab_data:
+    if page == "Data Explorer":
         st.header("Data Explorer")
 
         df_master = _load_master()
@@ -249,8 +240,8 @@ def main():
                 st.info("No operation hours columns found in master dataset.")
 
     # Model Performance tab: show per-op metrics
-    with tab_perf:
-        st.header("Model Performance")
+    if page == "Model Health":
+        st.header("Model Health")
 
         metrics_df = _load_metrics()
         if metrics_df is None or metrics_df.empty:
@@ -283,7 +274,7 @@ def main():
 
 
     # Drivers & Similar Projects tab
-    with tab_drivers:
+    if page == "Drivers & Similar":
         st.header("Drivers & Similar Projects")
 
         df_master = _load_master()
@@ -428,7 +419,7 @@ def main():
 
 
     # Single Quote tab
-    with tab_single:
+    if page == "Quote":
         st.header("Single quote estimation")
 
         if not st.session_state["models_ready"]:
@@ -589,7 +580,7 @@ def main():
 
 
     # Batch Quotes tab
-    with tab_batch:
+    if page == "Batch Quotes":
         st.header("Batch estimation via CSV")
 
         if not st.session_state["models_ready"]:
@@ -629,7 +620,7 @@ def main():
 
 
     # Admin tab: dataset upload + master merge + retrain
-    with tab_admin:
+    if page == "Admin: Upload & Train":
         st.header("Admin: Upload dataset and train models")
 
         st.markdown(
