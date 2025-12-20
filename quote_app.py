@@ -445,24 +445,79 @@ def main():
                                     "Limited history; expect higher variability."
                                 )
 
-                    if "robot_count" in df_filtered.columns:
-                        with st.expander(
-                            "Optional: robot count comparison",
-                            expanded=False,
-                        ):
-                            st.write(f"robot_count vs {op_choice}")
-                            scatter_df = df_filtered[
-                                ["robot_count", op_choice]
-                            ].dropna()
-                            scatter_df = scatter_df.rename(
-                                columns={
-                                    "robot_count": "robot_count",
-                                    op_choice: "hours",
+                    st.subheader("Key drivers")
+                    pipe = load_model(op_choice)
+                    pre = None
+                    model = None
+                    stored_importances = None
+
+                    if pipe is None:
+                        st.info(
+                            "No model artifact loaded for this operation. "
+                            "Check the Drivers & Similar Projects tab for "
+                            "details."
+                        )
+                    elif isinstance(pipe, dict) and {
+                        "preprocessor",
+                        "model_mid",
+                    }.issubset(pipe):
+                        pre = pipe["preprocessor"]
+                        model = pipe["model_mid"]
+                        stored_importances = (
+                            pipe.get("meta", {}).get("feature_importances")
+                        )
+                    elif isinstance(pipe, Pipeline):
+                        pre = pipe.named_steps.get("preprocess")
+                        model = pipe.named_steps.get("model")
+                    else:
+                        st.info(
+                            "Loaded artifact is not compatible with feature "
+                            "importance. See the Drivers & Similar Projects "
+                            "tab for more context."
+                        )
+
+                    if model is None or (
+                        not hasattr(model, "feature_importances_")
+                        and not stored_importances
+                    ):
+                        st.info(
+                            "Feature importances are unavailable for this "
+                            "operation. Visit the Drivers & Similar Projects "
+                            "tab for more details or to confirm the model type."
+                        )
+                    else:
+                        if stored_importances:
+                            fi_df = pd.DataFrame(stored_importances)
+                        else:
+                            try:
+                                feature_names = pre.get_feature_names_out()
+                            except Exception:
+                                feature_names = [
+                                    f"f_{i}"
+                                    for i in range(
+                                        len(model.feature_importances_)
+                                    )
+                                ]
+
+                            importances = model.feature_importances_
+                            fi_df = pd.DataFrame(
+                                {
+                                    "feature": feature_names,
+                                    "importance": importances,
                                 }
                             )
-                            st.scatter_chart(
-                                scatter_df, x="robot_count", y="hours"
-                            )
+
+                        fi_df = (
+                            fi_df.sort_values(
+                                "importance", ascending=False
+                            ).reset_index(drop=True)
+                        )
+
+                        st.write("Top drivers by importance")
+                        st.dataframe(fi_df.head(10))
+                        st.bar_chart(
+                            fi_df.head(10).set_index("feature")["importance"]
+                        )
             else:
                 st.info("No operation hours columns found in master dataset.")
 
