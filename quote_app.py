@@ -753,7 +753,8 @@ def main():
 
                                 st.success(
                                     "Master dataset updated and models trained. "
-                                    "Quoting tabs now use the latest models."
+                                    "Quoting tabs now use the latest models. "
+                                    "The app will refresh to show trained status."
                                 )
                                 st.subheader("Model metrics")
                                 st.dataframe(metrics_df)
@@ -767,7 +768,7 @@ def main():
                                     file_name="metrics_summary.csv",
                                     mime="text/csv",
                                 )
-                                _rerun_app()
+                                st.rerun()
                             else:
                                 st.warning(
                                     "No models were trained (not enough data for any operation). "
