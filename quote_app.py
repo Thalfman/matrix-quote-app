@@ -577,6 +577,7 @@ def main():
                         pipe = load_model(target_choice)
                         pre = None
                         model = None
+                        stored_importances = None
 
                         if pipe is None:
                             st.warning(
@@ -588,6 +589,10 @@ def main():
                         }.issubset(pipe):
                             pre = pipe["preprocessor"]
                             model = pipe["model_mid"]
+                            stored_importances = (
+                                pipe.get("meta", {})
+                                .get("feature_importances")
+                            )
                         elif isinstance(pipe, Pipeline):
                             pre = pipe.named_steps.get("preprocess")
                             model = pipe.named_steps.get("model")
@@ -598,31 +603,38 @@ def main():
 
                         if model is None or not hasattr(
                             model, "feature_importances_"
-                        ):
+                        ) and not stored_importances:
                             st.info(
                                 "Selected model does not expose feature_importances_."
                             )
                         else:
-                            try:
-                                feature_names = pre.get_feature_names_out()
-                            except Exception:
-                                feature_names = [
-                                    f"f_{i}"
-                                    for i in range(
-                                        len(model.feature_importances_)
+                            if stored_importances:
+                                fi_df = pd.DataFrame(stored_importances)
+                            else:
+                                try:
+                                    feature_names = (
+                                        pre.get_feature_names_out()
                                     )
-                                ]
+                                except Exception:
+                                    feature_names = [
+                                        f"f_{i}"
+                                        for i in range(
+                                            len(model.feature_importances_)
+                                        )
+                                    ]
 
-                            importances = model.feature_importances_
-                            fi_df = (
-                                pd.DataFrame(
+                                importances = model.feature_importances_
+                                fi_df = pd.DataFrame(
                                     {
                                         "feature": feature_names,
                                         "importance": importances,
                                     }
                                 )
-                                .sort_values("importance", ascending=False)
-                                .reset_index(drop=True)
+
+                            fi_df = (
+                                fi_df.sort_values(
+                                    "importance", ascending=False
+                                ).reset_index(drop=True)
                             )
 
                             st.write("Top 15 features by importance")

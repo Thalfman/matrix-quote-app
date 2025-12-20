@@ -10,6 +10,7 @@ import pandas as pd
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -80,6 +81,54 @@ def _safe_mean(values: np.ndarray) -> float:
     if values.size == 0:
         return float("nan")
     return float(np.mean(values))
+
+
+def _get_feature_names(
+    preprocessor: ColumnTransformer, feature_count: int
+) -> list[str]:
+    try:
+        feature_names = preprocessor.get_feature_names_out()
+    except Exception:
+        feature_names = [f"f_{i}" for i in range(feature_count)]
+    return list(feature_names)
+
+
+def _compute_feature_importances(
+    model: Any,
+    X_eval: np.ndarray,
+    y_eval: np.ndarray,
+    feature_names: list[str],
+) -> Optional[list[Dict[str, float]]]:
+    importances: Optional[np.ndarray] = None
+    if hasattr(model, "feature_importances_"):
+        try:
+            importances = np.asarray(model.feature_importances_)
+        except Exception:
+            importances = None
+    elif X_eval is not None and y_eval.size > 0:
+        try:
+            result = permutation_importance(
+                model,
+                X_eval,
+                y_eval,
+                n_repeats=5,
+                random_state=42,
+            )
+            importances = result.importances_mean
+        except Exception:
+            importances = None
+
+    if importances is None:
+        return None
+
+    feature_count = min(len(feature_names), len(importances))
+    return [
+        {
+            "feature": feature_names[i],
+            "importance": float(importances[i]),
+        }
+        for i in range(feature_count)
+    ]
 
 
 def _empty_cqr_metrics(
@@ -223,6 +272,14 @@ def train_one_op_cqr(
         f"{target}: n={len(y)}, alpha={alpha:.2f}, qhat={qhat:.2f}"
     )
 
+    feature_names = _get_feature_names(pre, X_train_proc.shape[1])
+    feature_importances = _compute_feature_importances(
+        model_mid,
+        X_calib_proc,
+        y_calib.to_numpy(),
+        feature_names,
+    )
+
     artifact: CQRArtifact = {
         "preprocessor": pre,
         "model_lo": model_lo,
@@ -235,6 +292,7 @@ def train_one_op_cqr(
             "num_features": list(num_features),
             "cat_features": list(cat_features),
             "feature_columns": list(X.columns),
+            "feature_importances": feature_importances,
             "split_sizes": {
                 "train": int(len(y_train)),
                 "calib": int(len(y_calib)),
