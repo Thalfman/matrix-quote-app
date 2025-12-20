@@ -279,6 +279,7 @@ def main():
         st.header("Data Explorer")
 
         df_master = _load_master()
+        metrics_df = _load_metrics()
         if df_master is None or df_master.empty:
             st.info(
                 "Master dataset is empty. Upload and train in the Admin tab first."
@@ -344,20 +345,84 @@ def main():
                     st.bar_chart(df_filtered[op_choice].dropna())
 
                 with col_charts2:
+                    st.subheader("Operation performance")
+                    if metrics_df is None or metrics_df.empty:
+                        st.info(
+                            "Train models to see operation performance here."
+                        )
+                    else:
+                        op_metrics = metrics_df.loc[
+                            metrics_df["target"] == op_choice
+                        ]
+                        if op_metrics.empty:
+                            st.info(
+                                "Train models to see operation performance here."
+                            )
+                        else:
+                            op_row = op_metrics.iloc[0]
+                            trained_val = op_row.get("trained", True)
+                            trained = (
+                                "Yes"
+                                if bool(trained_val)
+                                else "No"
+                            )
+                            rows = op_row.get("rows")
+                            mae = op_row.get("mae")
+                            coverage = op_row.get("coverage")
+                            coverage_pct = (
+                                f"{coverage * 100:.0f}%"
+                                if coverage is not None
+                                and not pd.isna(coverage)
+                                else "—"
+                            )
+                            rows_label = (
+                                f"{int(rows)}"
+                                if rows is not None
+                                and not pd.isna(rows)
+                                else "—"
+                            )
+
+                            st.write(f"**Trained:** {trained}")
+                            st.write(
+                                f"**Training examples (rows):** {rows_label}"
+                            )
+                            st.write(
+                                f"**{LABEL_TYPICAL_MISS}:** {fmt_hours(mae)}"
+                            )
+                            st.write(
+                                f"**{LABEL_RANGE_RELIABILITY}:** {coverage_pct}"
+                            )
+                            if not bool(trained_val):
+                                st.caption(
+                                    "Not enough history yet for this operation."
+                                )
+                            elif (
+                                rows is not None
+                                and not pd.isna(rows)
+                                and rows < 15
+                            ):
+                                st.caption(
+                                    "Limited history; expect higher variability."
+                                )
+
                     if "robot_count" in df_filtered.columns:
-                        st.write(f"robot_count vs {op_choice}")
-                        scatter_df = df_filtered[
-                            ["robot_count", op_choice]
-                        ].dropna()
-                        scatter_df = scatter_df.rename(
-                            columns={
-                                "robot_count": "robot_count",
-                                op_choice: "hours",
-                            }
-                        )
-                        st.scatter_chart(
-                            scatter_df, x="robot_count", y="hours"
-                        )
+                        with st.expander(
+                            "Optional: robot count comparison",
+                            expanded=False,
+                        ):
+                            st.write(f"robot_count vs {op_choice}")
+                            scatter_df = df_filtered[
+                                ["robot_count", op_choice]
+                            ].dropna()
+                            scatter_df = scatter_df.rename(
+                                columns={
+                                    "robot_count": "robot_count",
+                                    op_choice: "hours",
+                                }
+                            )
+                            st.scatter_chart(
+                                scatter_df, x="robot_count", y="hours"
+                            )
             else:
                 st.info("No operation hours columns found in master dataset.")
 
