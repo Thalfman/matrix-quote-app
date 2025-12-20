@@ -9,14 +9,12 @@ import numpy as np
 import pandas as pd
 
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from scipy import sparse
 
-from .config import TARGETS
 from .features import build_training_data
 from . import cqr
 
@@ -301,60 +299,6 @@ def train_one_op(
     )
 
 
-def train_one_op_rf(
-    df_master: pd.DataFrame,
-    target: str,
-    models_dir: str = "models",
-    version: str = DEFAULT_MODEL_VERSION,
-) -> Optional[Dict[str, Any]]:
-    """
-    Legacy RandomForest training for a single operation's actual hours.
-    Saves a pipeline per target and returns basic metrics.
-    """
-    X, y, num_features, cat_features, sub = build_training_data(
-        df_master, target
-    )
-    if X is None:
-        print(f"Skipping {target}: not enough data.")
-        return None
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42
-    )
-
-    pre = build_preprocessor(num_features, cat_features)
-
-    rf = RandomForestRegressor(
-        n_estimators=400,
-        random_state=42,
-        n_jobs=-1,
-    )
-
-    pipe = Pipeline(steps=[("preprocess", pre), ("model", rf)])
-
-    pipe.fit(X_train, y_train)
-    pred = pipe.predict(X_test)
-
-    mae = float(np.mean(np.abs(y_test - pred)))
-    r2 = float(np.corrcoef(y_test, pred)[0, 1] ** 2) if len(y_test) > 1 else 0.0
-
-    print(f"{target}: n={len(sub)}, MAE={mae:.1f}, R2={r2:.2f}")
-
-    os.makedirs(models_dir, exist_ok=True)
-    model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
-    joblib.dump(pipe, model_path)
-
-    metrics = {
-        "target": target,
-        "version": version,
-        "rows": int(len(sub)),
-        "mae": float(mae),
-        "r2": float(r2),
-        "model_path": model_path,
-    }
-    return metrics
-
-
 def _format_confidence(alpha: Optional[float]) -> str:
     if alpha is None:
         alpha = DEFAULT_ALPHA
@@ -405,42 +349,55 @@ def predict_target_with_interval(
             ),
         }
 
-    if isinstance(target_artifact, Pipeline):
-        p50, p10, p90, std = _predict_with_rf_pipeline(target_artifact, X_df)
+    if _is_legacy_model(target_artifact):
+        p50, p10, p90, std = _predict_with_legacy_model(
+            target_artifact, X_df
+        )
         return {
             "p10": p10,
             "p50": p50,
             "p90": p90,
             "std": std,
-            "confidence": "heuristic",
+            "confidence": "legacy",
         }
 
     return None
 
 
-def _predict_with_rf_pipeline(
-    pipe: Pipeline, X_df: pd.DataFrame
+def _is_legacy_model(artifact: Any) -> bool:
+    if artifact is None:
+        return False
+    return isinstance(artifact, Pipeline) or hasattr(artifact, "predict")
+
+
+def _predict_with_legacy_model(
+    model: Any, X_df: pd.DataFrame
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Use individual trees from the RandomForest to get a prediction distribution:
-    - p50: central estimate (mean)
-    - p10/p90: lower/upper bounds
-    - std: spread
+    Best-effort legacy prediction for older artifacts without CQR metadata.
+    Produces wide bounds to avoid implied calibration.
     """
-    pre = pipe.named_steps["preprocess"]
-    rf = pipe.named_steps["model"]
+    if isinstance(model, Pipeline):
+        try:
+            p50 = model.predict(X_df)
+        except Exception:
+            if hasattr(model, "named_steps") and "preprocess" in model.named_steps:
+                pre = model.named_steps["preprocess"]
+                X_proc = _ensure_dense_array(pre.transform(X_df))
+                if "model" in model.named_steps:
+                    p50 = model.named_steps["model"].predict(X_proc)
+                else:
+                    p50 = model.predict(X_proc)
+            else:
+                raise
+    else:
+        p50 = model.predict(X_df)
 
-    X_proc = _ensure_dense_array(pre.transform(X_df))
-    tree_preds = np.stack(
-        [tree.predict(X_proc) for tree in rf.estimators_],
-        axis=1,
-    )
-
-    p50 = np.mean(tree_preds, axis=1)
-    p10 = np.percentile(tree_preds, 10, axis=1)
-    p90 = np.percentile(tree_preds, 90, axis=1)
-    std = np.std(tree_preds, axis=1)
-
+    p50 = np.asarray(p50)
+    spread = np.maximum(np.abs(p50) * 0.5, 1.0)
+    p10 = p50 - spread
+    p90 = p50 + spread
+    std = spread / 1.645
     return p50, p10, p90, std
 
 
