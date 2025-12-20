@@ -202,30 +202,38 @@ def main():
                 and "mae" in metrics_df.columns
             ):
                 avg_mae = metrics_df["mae"].mean()
-                st.metric("Average MAE (hours)", f"{avg_mae:.1f}")
+                st.metric("Typical miss (avg hours)", f"{avg_mae:.1f}")
             else:
-                st.metric("Average MAE (hours)", "N/A")
+                st.metric("Typical miss (avg hours)", "N/A")
 
         st.markdown("---")
 
         colA, colB = st.columns(2)
 
         with colA:
-            st.subheader("Upload history")
-            if os.path.exists(UPLOADS_LOG_PATH):
-                df_log = pd.read_csv(UPLOADS_LOG_PATH)
-                st.dataframe(df_log.tail(10))
-            else:
-                st.info("No uploads logged yet. Use the Admin tab to upload data.")
+            with st.expander(
+                "Technical (admin): upload history", expanded=False
+            ):
+                st.subheader("Upload history")
+                if os.path.exists(UPLOADS_LOG_PATH):
+                    df_log = pd.read_csv(UPLOADS_LOG_PATH)
+                    st.dataframe(df_log.tail(10))
+                else:
+                    st.info(
+                        "No uploads logged yet. Use the Admin tab to upload data."
+                    )
 
         with colB:
-            st.subheader("Model metrics snapshot")
-            if metrics_df is not None and not metrics_df.empty:
-                st.dataframe(metrics_df)
-            else:
-                st.info(
-                    "No models trained yet. Use the Admin tab after uploading data."
-                )
+            with st.expander(
+                "Technical (admin): per-operation metrics", expanded=False
+            ):
+                st.subheader("Model metrics snapshot")
+                if metrics_df is not None and not metrics_df.empty:
+                    st.dataframe(metrics_df)
+                else:
+                    st.info(
+                        "No models trained yet. Use the Admin tab after uploading data."
+                    )
 
     # Data Explorer tab: explore master dataset
     with tab_data:
@@ -322,30 +330,71 @@ def main():
         if metrics_df is None or metrics_df.empty:
             st.info("No models trained yet. Use the Admin tab after uploading data.")
         else:
-            st.subheader("Per-operation metrics")
-            st.dataframe(metrics_df)
+            st.subheader("Model health summary")
+            if "trained" in metrics_df.columns:
+                trained_targets = metrics_df.loc[
+                    metrics_df["trained"].fillna(False), "target"
+                ].tolist()
+                untrained_from_metrics = metrics_df.loc[
+                    ~metrics_df["trained"].fillna(False), "target"
+                ].tolist()
+            else:
+                trained_targets = metrics_df["target"].tolist()
+                untrained_from_metrics = []
 
-            col_perf1, col_perf2 = st.columns(2)
+            not_trained_ops = [
+                target
+                for target in TARGETS
+                if target not in trained_targets
+            ]
+            not_trained_ops.extend(
+                [
+                    target
+                    for target in untrained_from_metrics
+                    if target not in not_trained_ops
+                ]
+            )
 
-            with col_perf1:
-                if "mae" in metrics_df.columns:
-                    st.write("MAE by operation")
-                    mae_chart = metrics_df[["target", "mae"]].set_index(
-                        "target"
-                    )
-                    st.bar_chart(mae_chart)
-                else:
-                    st.info("MAE metrics not available.")
+            st.write(f"Models trained: {len(trained_targets)}")
+            if not_trained_ops:
+                st.write(
+                    f"Not trained operations ({len(not_trained_ops)}): "
+                    + ", ".join(not_trained_ops)
+                )
+            else:
+                st.write("Not trained operations: 0")
 
-            with col_perf2:
-                if "r2" in metrics_df.columns:
-                    st.write("R² by operation")
-                    r2_chart = metrics_df[["target", "r2"]].set_index(
-                        "target"
-                    )
-                    st.bar_chart(r2_chart)
-                else:
-                    st.info("R² metrics not available.")
+            if "mae" in metrics_df.columns:
+                typical_miss = metrics_df["mae"].mean()
+                st.write(f"Typical miss (avg hours): {typical_miss:.1f}")
+
+            with st.expander(
+                "Technical (admin): full metrics and charts", expanded=False
+            ):
+                st.subheader("Per-operation metrics")
+                st.dataframe(metrics_df)
+
+                col_perf1, col_perf2 = st.columns(2)
+
+                with col_perf1:
+                    if "mae" in metrics_df.columns:
+                        st.write("MAE by operation")
+                        mae_chart = metrics_df[["target", "mae"]].set_index(
+                            "target"
+                        )
+                        st.bar_chart(mae_chart)
+                    else:
+                        st.info("MAE metrics not available.")
+
+                with col_perf2:
+                    if "r2" in metrics_df.columns:
+                        st.write("R² by operation")
+                        r2_chart = metrics_df[["target", "r2"]].set_index(
+                            "target"
+                        )
+                        st.bar_chart(r2_chart)
+                    else:
+                        st.info("R² metrics not available.")
 
 
     # Drivers & Similar Projects tab
@@ -360,64 +409,85 @@ def main():
 
             # Drivers: feature importance by operation
             with col_dr1:
-                st.subheader("Global drivers by operation")
+                with st.expander(
+                    "Technical (admin): model drivers", expanded=False
+                ):
+                    st.subheader("Global drivers by operation")
 
-                modeled_ops = [
-                    t
-                    for t in TARGETS
-                    if os.path.exists(os.path.join("models", f"{t}_v1.joblib"))
-                ]
-                if not modeled_ops:
-                    st.info("No trained models found in ./models.")
-                else:
-                    target_choice = st.selectbox(
-                        "Select operation", modeled_ops, key="drivers_op_select"
-                    )
-
-                    pipe = load_model(target_choice)
-                    pre = None
-                    model = None
-
-                    if pipe is None:
-                        st.warning("No model artifact loaded for this operation.")
-                    elif isinstance(pipe, dict) and {
-                        "preprocessor",
-                        "model_mid",
-                    }.issubset(pipe):
-                        pre = pipe["preprocessor"]
-                        model = pipe["model_mid"]
-                    elif isinstance(pipe, Pipeline):
-                        pre = pipe.named_steps.get("preprocess")
-                        model = pipe.named_steps.get("model")
+                    modeled_ops = [
+                        t
+                        for t in TARGETS
+                        if os.path.exists(
+                            os.path.join("models", f"{t}_v1.joblib")
+                        )
+                    ]
+                    if not modeled_ops:
+                        st.info("No trained models found in ./models.")
                     else:
-                        st.info(
-                            "Loaded artifact is not compatible with feature importance."
+                        target_choice = st.selectbox(
+                            "Select operation",
+                            modeled_ops,
+                            key="drivers_op_select",
                         )
 
-                    if model is None or not hasattr(model, "feature_importances_"):
-                        st.info(
-                            "Selected model does not expose feature_importances_."
-                        )
-                    else:
-                        try:
-                            feature_names = pre.get_feature_names_out()
-                        except Exception:
-                            feature_names = [
-                                f"f_{i}" for i in range(len(model.feature_importances_))
-                            ]
+                        pipe = load_model(target_choice)
+                        pre = None
+                        model = None
 
-                        importances = model.feature_importances_
-                        fi_df = (
-                            pd.DataFrame(
-                                {"feature": feature_names, "importance": importances}
+                        if pipe is None:
+                            st.warning(
+                                "No model artifact loaded for this operation."
                             )
-                            .sort_values("importance", ascending=False)
-                            .reset_index(drop=True)
-                        )
+                        elif isinstance(pipe, dict) and {
+                            "preprocessor",
+                            "model_mid",
+                        }.issubset(pipe):
+                            pre = pipe["preprocessor"]
+                            model = pipe["model_mid"]
+                        elif isinstance(pipe, Pipeline):
+                            pre = pipe.named_steps.get("preprocess")
+                            model = pipe.named_steps.get("model")
+                        else:
+                            st.info(
+                                "Loaded artifact is not compatible with feature importance."
+                            )
 
-                        st.write("Top 15 features by importance")
-                        st.dataframe(fi_df.head(15))
-                        st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
+                        if model is None or not hasattr(
+                            model, "feature_importances_"
+                        ):
+                            st.info(
+                                "Selected model does not expose feature_importances_."
+                            )
+                        else:
+                            try:
+                                feature_names = pre.get_feature_names_out()
+                            except Exception:
+                                feature_names = [
+                                    f"f_{i}"
+                                    for i in range(
+                                        len(model.feature_importances_)
+                                    )
+                                ]
+
+                            importances = model.feature_importances_
+                            fi_df = (
+                                pd.DataFrame(
+                                    {
+                                        "feature": feature_names,
+                                        "importance": importances,
+                                    }
+                                )
+                                .sort_values("importance", ascending=False)
+                                .reset_index(drop=True)
+                            )
+
+                            st.write("Top 15 features by importance")
+                            st.dataframe(fi_df.head(15))
+                            st.bar_chart(
+                                fi_df.head(15).set_index("feature")[
+                                    "importance"
+                                ]
+                            )
 
             # Similar projects: filter-based helper
             with col_dr2:
