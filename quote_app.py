@@ -55,12 +55,28 @@ def _load_metrics():
     return None
 
 
+def _models_ready_from_disk():
+    if os.path.exists(METRICS_PATH):
+        return True
+    return any(
+        os.path.exists(os.path.join("models", f"{target}_v1.joblib"))
+        for target in TARGETS
+    )
+
+
+def _rerun_app():
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
+
+
 def main():
     st.set_page_config(page_title="Matrix Quote App", layout="wide")
     st.title("Matrix Quote App")
 
-    if "models_ready" not in st.session_state:
-        st.session_state["models_ready"] = False
+    if not st.session_state.get("models_ready", False):
+        st.session_state["models_ready"] = _models_ready_from_disk()
 
     tabs = st.tabs(
         [
