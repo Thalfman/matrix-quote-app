@@ -30,6 +30,16 @@ def _compute_rel_width(p10: float, p50: float, p90: float) -> float:
     return width / denom
 
 
+def _parse_confidence_pct(confidence_label: str) -> float | None:
+    """Extract the numeric percent from a confidence label like '90% calibrated'."""
+    if not confidence_label:
+        return None
+    percent = confidence_label.split("%", 1)[0].strip()
+    if not percent.replace(".", "", 1).isdigit():
+        return None
+    return float(percent)
+
+
 def predict_quote(q: QuoteInput) -> QuotePrediction:
     """
     Predict hours for a single project described by QuoteInput.
@@ -47,6 +57,8 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
             p10 = p50 = p90 = std = 0.0
             rel_width = 0.0
             conf_label = "not trained"
+            trained = False
+            confidence_pct = None
         else:
             p10 = float(result["p10"][0])
             p50 = float(result["p50"][0])
@@ -58,6 +70,11 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
                 if result.get("confidence") != "not trained"
                 else "not trained"
             )
+            trained = True
+            confidence_pct = (
+                _parse_confidence_pct(result.get("confidence", ""))
+                or _parse_confidence_pct(conf_label)
+            )
 
         op_name = target.replace("_actual_hours", "")
         ops[op_name] = OpPrediction(
@@ -66,6 +83,8 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
             p90=p90,
             std=std,
             rel_width=rel_width,
+            trained=trained,
+            confidence_pct=confidence_pct,
             confidence=conf_label,
         )
 
@@ -98,12 +117,23 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
         if result is None:
             p10_arr = p50_arr = p90_arr = std_arr = np.zeros(len(df))
             conf_arr = ["not trained"] * len(df)
+            trained_arr = np.array([False] * len(df))
+            conf_pct_arr = np.array([None] * len(df), dtype=object)
         else:
             p10_arr = result["p10"]
             p50_arr = result["p50"]
             p90_arr = result["p90"]
             std_arr = result["std"]
             conf_arr = ["90% calibrated"] * len(df)
+            trained_arr = np.array([True] * len(df))
+            conf_pct_arr = np.array(
+                [
+                    _parse_confidence_pct(result.get("confidence", ""))
+                    or _parse_confidence_pct(conf_arr[0])
+                ]
+                * len(df),
+                dtype=object,
+            )
 
         op_name = target.replace("_actual_hours", "")
         df[f"{op_name}_p50"] = p50_arr
@@ -111,6 +141,8 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
         df[f"{op_name}_p90"] = p90_arr
         df[f"{op_name}_std"] = std_arr
         df[f"{op_name}_confidence"] = conf_arr
+        df[f"{op_name}_trained"] = trained_arr
+        df[f"{op_name}_confidence_pct"] = conf_pct_arr
 
         df["total_p50"] += p50_arr
         df["total_p10"] += p10_arr
