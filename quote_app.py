@@ -12,6 +12,7 @@ import os
 
 import pandas as pd
 import streamlit as st
+from sklearn.pipeline import Pipeline
 
 from core.config import (
     QUOTE_NUM_FEATURES,
@@ -308,28 +309,49 @@ def main():
                     )
 
                     pipe = load_model(target_choice)
-                    pre = pipe.named_steps["preprocess"]
-                    model = pipe.named_steps["model"]
+                    pre = None
+                    model = None
 
-                    try:
-                        feature_names = pre.get_feature_names_out()
-                    except Exception:
-                        feature_names = [
-                            f"f_{i}" for i in range(len(model.feature_importances_))
-                        ]
-
-                    importances = model.feature_importances_
-                    fi_df = (
-                        pd.DataFrame(
-                            {"feature": feature_names, "importance": importances}
+                    if pipe is None:
+                        st.warning("No model artifact loaded for this operation.")
+                    elif isinstance(pipe, dict) and {
+                        "preprocessor",
+                        "model_mid",
+                    }.issubset(pipe):
+                        pre = pipe["preprocessor"]
+                        model = pipe["model_mid"]
+                    elif isinstance(pipe, Pipeline):
+                        pre = pipe.named_steps.get("preprocess")
+                        model = pipe.named_steps.get("model")
+                    else:
+                        st.info(
+                            "Loaded artifact is not compatible with feature importance."
                         )
-                        .sort_values("importance", ascending=False)
-                        .reset_index(drop=True)
-                    )
 
-                    st.write("Top 15 features by importance")
-                    st.dataframe(fi_df.head(15))
-                    st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
+                    if model is None or not hasattr(model, "feature_importances_"):
+                        st.info(
+                            "Selected model does not expose feature_importances_."
+                        )
+                    else:
+                        try:
+                            feature_names = pre.get_feature_names_out()
+                        except Exception:
+                            feature_names = [
+                                f"f_{i}" for i in range(len(model.feature_importances_))
+                            ]
+
+                        importances = model.feature_importances_
+                        fi_df = (
+                            pd.DataFrame(
+                                {"feature": feature_names, "importance": importances}
+                            )
+                            .sort_values("importance", ascending=False)
+                            .reset_index(drop=True)
+                        )
+
+                        st.write("Top 15 features by importance")
+                        st.dataframe(fi_df.head(15))
+                        st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
 
             # Similar projects: filter-based helper
             with col_dr2:
