@@ -768,7 +768,7 @@ def main():
                                     file_name="metrics_summary.csv",
                                     mime="text/csv",
                                 )
-                                st.rerun()
+                                _rerun_app()
                             else:
                                 st.warning(
                                     "No models were trained (not enough data for any operation). "
