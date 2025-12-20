@@ -129,32 +129,101 @@ def main() -> None:
             if not trained_targets:
                 raise RuntimeError("No models trained; cannot run predictions.")
 
-            original_targets = predict_lib.TARGETS
-            predict_lib.TARGETS = trained_targets
-            try:
-                quote = _build_quote_input(df_raw)
-                single_pred = predict_quote(quote)
+            quote = _build_quote_input(df_raw)
+            single_pred = predict_quote(quote)
 
-                first_op = next(iter(single_pred.ops.values()))
-                assert all(
-                    value is not None
-                    for value in (first_op.p10, first_op.p50, first_op.p90)
-                ), "Single prediction missing p10/p50/p90."
+            trained_target = trained_targets[0]
+            trained_op_name = trained_target.replace("_actual_hours", "")
+            trained_op = single_pred.ops[trained_op_name]
+            assert all(
+                value is not None
+                for value in (trained_op.p10, trained_op.p50, trained_op.p90)
+            ), "Single prediction missing p10/p50/p90."
+            assert (
+                trained_op.p10 <= trained_op.p50 <= trained_op.p90
+            ), "Single prediction interval ordering violated."
+            assert np.isfinite(
+                trained_op.p90 - trained_op.p10
+            ), "Single prediction interval width not finite."
+            assert (
+                trained_op.p90 - trained_op.p10 >= 0.0
+            ), "Single prediction interval width negative."
+            assert (
+                single_pred.total_p10
+                <= single_pred.total_p50
+                <= single_pred.total_p90
+            ), "Total interval ordering violated."
 
-                batch_input = df_raw[
-                    QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES
-                ].head(5)
-                batch_pred = predict_quotes_df(batch_input)
+            batch_input = df_raw[
+                QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES
+            ].head(8)
+            batch_pred = predict_quotes_df(batch_input)
 
-                op_name = trained_targets[0].replace("_actual_hours", "")
-                for suffix in ("p10", "p50", "p90"):
-                    col_name = f"{op_name}_{suffix}"
-                    if col_name not in batch_pred.columns:
-                        raise AssertionError(
-                            f"Batch prediction missing column: {col_name}"
-                        )
-            finally:
-                predict_lib.TARGETS = original_targets
+            for suffix in ("p10", "p50", "p90"):
+                col_name = f"{trained_op_name}_{suffix}"
+                if col_name not in batch_pred.columns:
+                    raise AssertionError(
+                        f"Batch prediction missing column: {col_name}"
+                    )
+
+            p10 = batch_pred[f"{trained_op_name}_p10"].to_numpy()
+            p50 = batch_pred[f"{trained_op_name}_p50"].to_numpy()
+            p90 = batch_pred[f"{trained_op_name}_p90"].to_numpy()
+            assert np.all(
+                np.isfinite(p90 - p10)
+            ), "Batch interval width not finite."
+            assert np.all(
+                (p10 <= p50) & (p50 <= p90)
+            ), "Batch interval ordering violated."
+            assert np.all(
+                (p90 - p10) >= 0.0
+            ), "Batch interval width negative."
+            assert np.all(
+                batch_pred["total_p10"]
+                <= batch_pred["total_p50"]
+            ) and np.all(
+                batch_pred["total_p50"]
+                <= batch_pred["total_p90"]
+            ), "Batch total interval ordering violated."
+
+            zero_op_name = zero_target.replace("_actual_hours", "")
+            zero_op = single_pred.ops[zero_op_name]
+            assert (
+                zero_op.p10 == 0.0
+                and zero_op.p50 == 0.0
+                and zero_op.p90 == 0.0
+            ), "Untrained target should return zero bounds."
+            assert (
+                "not trained" in (zero_op.confidence or "").lower()
+                or zero_op.trained is False
+            ), "Untrained target missing not trained indicator."
+
+            assert np.allclose(
+                batch_pred[f"{zero_op_name}_p10"].to_numpy(), 0.0
+            ) and np.allclose(
+                batch_pred[f"{zero_op_name}_p50"].to_numpy(), 0.0
+            ) and np.allclose(
+                batch_pred[f"{zero_op_name}_p90"].to_numpy(), 0.0
+            ), "Batch untrained target should return zero bounds."
+            assert np.all(
+                batch_pred[f"{zero_op_name}_confidence"]
+                .astype(str)
+                .str.contains("not trained", case=False)
+            ) or np.all(
+                batch_pred[f"{zero_op_name}_trained"] == False
+            ), "Batch untrained target missing not trained indicator."
+
+            coverage_input = df_raw[
+                QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES
+            ].head(20)
+            coverage_pred = predict_quotes_df(coverage_input)
+            actuals = df_raw[trained_target].head(20).to_numpy()
+            cov_p10 = coverage_pred[f"{trained_op_name}_p10"].to_numpy()
+            cov_p90 = coverage_pred[f"{trained_op_name}_p90"].to_numpy()
+            coverage = np.mean((actuals >= cov_p10) & (actuals <= cov_p90))
+            assert (
+                coverage >= 0.70
+            ), f"Coverage below threshold: {coverage:.2f}"
 
         print(
             "OK: trained models in temp dir, "
