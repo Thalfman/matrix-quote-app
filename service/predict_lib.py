@@ -65,11 +65,7 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
             p90 = float(result["p90"][0])
             std = float(result["std"][0])
             rel_width = _compute_rel_width(p10, p50, p90)
-            conf_label = (
-                "90% calibrated"
-                if result.get("confidence") != "not trained"
-                else "not trained"
-            )
+            conf_label = result.get("confidence") or "90% calibrated"
             trained = True
             confidence_pct = (
                 _parse_confidence_pct(result.get("confidence", ""))
@@ -124,7 +120,8 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
             p50_arr = result["p50"]
             p90_arr = result["p90"]
             std_arr = result["std"]
-            conf_arr = ["90% calibrated"] * len(df)
+            confidence_label = result.get("confidence") or "90% calibrated"
+            conf_arr = [confidence_label] * len(df)
             trained_arr = np.array([True] * len(df))
             conf_pct_arr = np.array(
                 [

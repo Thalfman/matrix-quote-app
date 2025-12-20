@@ -488,6 +488,7 @@ def main():
                 pred = predict_quote(q)
 
                 rows = []
+                interval_lines = []
                 for op, op_pred in pred.ops.items():
                     rows.append(
                         {
@@ -497,12 +498,22 @@ def main():
                             "p90_hours": op_pred.p90,
                             "std_hours": op_pred.std,
                             "rel_width": op_pred.rel_width,
+                            "confidence_pct": op_pred.confidence_pct,
                             "confidence": op_pred.confidence,
                         }
                     )
+                    if op_pred.trained:
+                        interval_lines.append(
+                            f"**{op}**: 90% confident the true hours are between "
+                            f"{op_pred.p10:.1f} and {op_pred.p90:.1f}."
+                        )
+                    else:
+                        interval_lines.append(f"**{op}**: Not trained.")
                 df_out = pd.DataFrame(rows)
                 st.subheader("Per-operation predictions")
                 st.dataframe(df_out)
+                if interval_lines:
+                    st.caption("\n".join(f"- {line}" for line in interval_lines))
 
                 st.subheader("Project totals")
                 st.write(
