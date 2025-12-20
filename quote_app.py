@@ -41,6 +41,72 @@ METRICS_COLUMNS = [
     "r2",
 ]
 
+BUCKET_MAP = {
+    "me": "Mechanical",
+    "ee": "Electrical",
+    "cp": "Controls",
+    "rb": "Robotics",
+    "bld": "Build",
+    "shp": "Shop",
+    "inst": "Install",
+    "trv": "Travel",
+    "doc": "Documentation",
+    "pm": "Project Management",
+}
+
+LABELS = {
+    "typical_miss": "Typical miss (hours)",
+    "range_reliability": "Range reliability",
+}
+LABEL_TYPICAL_MISS = LABELS["typical_miss"]
+LABEL_RANGE_RELIABILITY = LABELS["range_reliability"]
+
+
+def fmt_hours(x) -> str:
+    if x is None or pd.isna(x):
+        return "—"
+    return f"{x:.1f} h"
+
+
+def fmt_range(lo, hi) -> str:
+    if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
+        return "—"
+    return f"{lo:.1f}–{hi:.1f} h"
+
+
+def compute_buffer(est, hi) -> float:
+    if est is None or hi is None or pd.isna(est) or pd.isna(hi):
+        return float("nan")
+    return hi - est
+
+
+def bucket_for_op(op_name: str) -> str:
+    op_prefix = "".join(ch for ch in op_name.lower() if ch.isalpha())
+    return BUCKET_MAP.get(op_prefix, "Other")
+
+
+def build_bucket_summary(pred_ops: dict) -> pd.DataFrame:
+    rows = []
+    for op_name, op_pred in pred_ops.items():
+        rows.append(
+            {
+                "Bucket": bucket_for_op(op_name),
+                "Low": op_pred.p10,
+                "Estimate": op_pred.p50,
+                "High": op_pred.p90,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=["Bucket", "Low", "Estimate", "High", "Buffer"]
+        )
+    df = pd.DataFrame(rows)
+    summary = df.groupby("Bucket", as_index=False).sum(numeric_only=True)
+    summary["Buffer"] = summary.apply(
+        lambda row: compute_buffer(row["Estimate"], row["High"]), axis=1
+    )
+    return summary[["Bucket", "Low", "Estimate", "High", "Buffer"]]
+
 
 def _load_master():
     """Load the master training dataset if it exists."""
