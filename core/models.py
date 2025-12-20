@@ -14,6 +14,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+from scipy import sparse
 
 from .config import TARGETS
 from .features import build_training_data
@@ -40,10 +41,15 @@ def build_preprocessor(num_features, cat_features) -> ColumnTransformer:
         steps=[("imputer", SimpleImputer(strategy="median"))]
     )
 
+    try:
+        onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    except TypeError:
+        onehot = OneHotEncoder(handle_unknown="ignore", sparse=False)
+
     categorical_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+            ("onehot", onehot),
         ]
     )
 
@@ -53,9 +59,16 @@ def build_preprocessor(num_features, cat_features) -> ColumnTransformer:
             ("cat", categorical_transformer, cat_features),
         ],
         remainder="drop",
+        sparse_threshold=0.0,
     )
 
     return pre
+
+
+def _ensure_dense_array(features: Any) -> np.ndarray:
+    if sparse.issparse(features):
+        return features.toarray()
+    return np.asarray(features)
 
 
 def get_target_model_path(target: str, model_dir: str) -> str:
@@ -150,9 +163,13 @@ def train_one_op_cqr(
     )
 
     pre = build_preprocessor(num_features, cat_features)
-    X_train_proc = pre.fit_transform(X_train)
-    X_calib_proc = pre.transform(X_calib)
-    X_test_proc = pre.transform(X_test) if X_test is not None else None
+    X_train_proc = _ensure_dense_array(pre.fit_transform(X_train))
+    X_calib_proc = _ensure_dense_array(pre.transform(X_calib))
+    X_test_proc = (
+        _ensure_dense_array(pre.transform(X_test))
+        if X_test is not None
+        else None
+    )
 
     q_lo = alpha / 2
     q_hi = 1 - alpha / 2
@@ -307,7 +324,7 @@ def predict_target_with_interval(
 
     if _is_cqr_artifact(target_artifact):
         pre = target_artifact["preprocessor"]
-        X_proc = pre.transform(X_df)
+        X_proc = _ensure_dense_array(pre.transform(X_df))
 
         model_lo = target_artifact["model_lo"]
         model_mid = target_artifact["model_mid"]
@@ -354,7 +371,7 @@ def _predict_with_rf_pipeline(
     pre = pipe.named_steps["preprocess"]
     rf = pipe.named_steps["model"]
 
-    X_proc = pre.transform(X_df)
+    X_proc = _ensure_dense_array(pre.transform(X_df))
     tree_preds = np.stack(
         [tree.predict(X_proc) for tree in rf.estimators_],
         axis=1,
