@@ -737,24 +737,20 @@ def main():
     if not st.session_state.get("models_ready", False):
         st.session_state["models_ready"] = _models_ready_from_disk()
 
-    admin_mode = st.sidebar.checkbox("Admin mode", value=False)
-    pages = ["Quote", "Batch Quotes"] + (
-        ["Overview", "Data Explorer", "Model Health", "Drivers & Similar", "Admin: Upload & Train"]
-        if admin_mode
-        else []
-    )
-    page = st.sidebar.radio("Navigate", pages)
-
-    page_renderers = {
+    pages = {
         "Overview": render_overview_page,
         "Data Explorer": render_data_explorer_page,
-        "Model Health": render_model_health_page,
-        "Drivers & Similar": render_drivers_page,
-        "Quote": render_quote_page,
+        "Model Performance": render_model_health_page,
+        "Drivers & Similar Projects": render_drivers_page,
+        "Single Quote": render_quote_page,
         "Batch Quotes": render_batch_page,
         "Admin: Upload & Train": render_admin_page,
     }
-    page_renderers[page]()
+
+    tabs = st.tabs(list(pages.keys()))
+    for tab, (page, render_fn) in zip(tabs, pages.items()):
+        with tab:
+            render_fn()
 
 
 if __name__ == "__main__":
