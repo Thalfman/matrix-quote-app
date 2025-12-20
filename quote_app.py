@@ -147,6 +147,46 @@ def build_bucket_summary(pred_ops: dict) -> pd.DataFrame:
     return summary[["Bucket", "Low", "Estimate", "High", "Buffer"]]
 
 
+def _sum_columns(df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    if not columns:
+        return pd.Series(0.0, index=df.index)
+    return df[columns].sum(axis=1)
+
+
+def build_batch_summary(df_in: pd.DataFrame, df_out: pd.DataFrame) -> pd.DataFrame:
+    df_summary = df_in.copy()
+    df_summary["total_low"] = df_out["total_p10"]
+    df_summary["total_estimate"] = df_out["total_p50"]
+    df_summary["total_high"] = df_out["total_p90"]
+    df_summary["total_buffer"] = df_summary["total_high"] - df_summary["total_estimate"]
+
+    for bucket in BUCKET_MAP:
+        low_cols = [
+            col
+            for col in df_out.columns
+            if col.startswith(f"{bucket}_") and col.endswith("_p10")
+        ]
+        estimate_cols = [
+            col
+            for col in df_out.columns
+            if col.startswith(f"{bucket}_") and col.endswith("_p50")
+        ]
+        high_cols = [
+            col
+            for col in df_out.columns
+            if col.startswith(f"{bucket}_") and col.endswith("_p90")
+        ]
+
+        df_summary[f"{bucket}_low"] = _sum_columns(df_out, low_cols)
+        df_summary[f"{bucket}_estimate"] = _sum_columns(df_out, estimate_cols)
+        df_summary[f"{bucket}_high"] = _sum_columns(df_out, high_cols)
+        df_summary[f"{bucket}_buffer"] = (
+            df_summary[f"{bucket}_high"] - df_summary[f"{bucket}_estimate"]
+        )
+
+    return df_summary
+
+
 def _load_master():
     """Load the master training dataset if it exists."""
     if os.path.exists(MASTER_DATA_PATH):
@@ -959,6 +999,12 @@ def main():
         if not st.session_state["models_ready"]:
             st.warning("Models are not trained yet. Go to 'Admin: Upload & Train' first.")
         else:
+            mode = st.radio(
+                "Export format",
+                ["Quote Summary", "Full Detail"],
+                index=0,
+                horizontal=True,
+            )
             st.markdown(
                 "Your CSV must include at least these columns: "
                 f"`{', '.join(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)}`"
@@ -980,10 +1026,14 @@ def main():
                 else:
                     if st.button("Run predictions on all rows"):
                         df_out = predict_quotes_df(df_in)
+                        if mode == "Quote Summary":
+                            df_export = build_batch_summary(df_in, df_out)
+                        else:
+                            df_export = df_out
                         st.subheader("Output preview")
-                        st.dataframe(df_out.head())
+                        st.dataframe(df_export.head())
 
-                        csv_bytes = df_out.to_csv(index=False).encode("utf-8")
+                        csv_bytes = df_export.to_csv(index=False).encode("utf-8")
                         st.download_button(
                             label="Download predictions CSV",
                             data=csv_bytes,
