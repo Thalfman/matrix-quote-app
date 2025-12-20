@@ -71,6 +71,39 @@ def _ensure_dense_array(features: Any) -> np.ndarray:
     return np.asarray(features)
 
 
+def _count_positive_rows(df_master: pd.DataFrame, target: str) -> int:
+    if target not in df_master.columns:
+        return 0
+    series = pd.to_numeric(df_master[target], errors="coerce").fillna(0)
+    return int((series > 0).sum())
+
+
+def _safe_mean(values: np.ndarray) -> float:
+    if values.size == 0:
+        return float("nan")
+    return float(np.mean(values))
+
+
+def _empty_cqr_metrics(
+    target: str,
+    version: str,
+    rows: int,
+    alpha: float,
+) -> Dict[str, Any]:
+    return {
+        "target": target,
+        "version": version,
+        "trained": False,
+        "rows": int(rows),
+        "mae": float("nan"),
+        "coverage": float("nan"),
+        "interval_width": float("nan"),
+        "qhat": float("nan"),
+        "alpha": float(alpha),
+        "r2": float("nan"),
+    }
+
+
 def get_target_model_path(target: str, model_dir: str) -> str:
     return os.path.join(
         model_dir,
@@ -144,19 +177,20 @@ def train_one_op_cqr(
     Train quantile Gradient Boosting models + CQR calibration for one target.
     Saves a CQR artifact per target and returns basic metrics.
     """
+    rows_available = _count_positive_rows(df_master, target)
     X, y, num_features, cat_features, sub = build_training_data(
         df_master, target
     )
     if X is None:
         print(f"Skipping {target}: not enough data.")
-        return None
+        return _empty_cqr_metrics(target, version, rows_available, alpha)
 
     mask = y > 0
     X = X.loc[mask]
     y = y.loc[mask]
     if len(y) < min_rows:
         print(f"Skipping {target}: not enough positive rows.")
-        return None
+        return _empty_cqr_metrics(target, version, int(len(y)), alpha)
 
     X_train, X_calib, y_train, y_calib, X_test, y_test = (
         _split_train_calib_test(X, y, random_state=42)
@@ -213,12 +247,37 @@ def train_one_op_cqr(
     }
     save_target_artifact(target, artifact, models_dir)
 
+    if X_test_proc is not None and y_test is not None and len(y_test) > 0:
+        X_eval_proc = X_test_proc
+        y_eval = y_test.to_numpy()
+    else:
+        X_eval_proc = X_calib_proc
+        y_eval = y_calib.to_numpy()
+
+    if X_eval_proc is not None and y_eval.size > 0:
+        eval_pred_mid = model_mid.predict(X_eval_proc)
+        eval_pred_lo = model_lo.predict(X_eval_proc)
+        eval_pred_hi = model_hi.predict(X_eval_proc)
+        eval_lo, eval_hi = cqr.apply_cqr(eval_pred_lo, eval_pred_hi, qhat)
+        mae = _safe_mean(np.abs(y_eval - eval_pred_mid))
+        coverage = _safe_mean((y_eval >= eval_lo) & (y_eval <= eval_hi))
+        interval_width = _safe_mean(eval_hi - eval_lo)
+    else:
+        mae = float("nan")
+        coverage = float("nan")
+        interval_width = float("nan")
+
     metrics = {
         "target": target,
         "version": version,
+        "trained": True,
         "rows": int(len(y)),
-        "alpha": float(alpha),
+        "mae": float(mae),
+        "coverage": float(coverage),
+        "interval_width": float(interval_width),
         "qhat": float(qhat),
+        "alpha": float(alpha),
+        "r2": float("nan"),
     }
     return metrics
 

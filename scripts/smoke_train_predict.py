@@ -123,7 +123,7 @@ def main() -> None:
                     models_dir="models",
                     version="v1",
                 )
-                if metrics:
+                if metrics and metrics.get("trained", True):
                     trained_targets.append(target)
 
             if not trained_targets:

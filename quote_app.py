@@ -27,6 +27,18 @@ from service.predict_lib import predict_quote, predict_quotes_df
 MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")
 UPLOADS_LOG_PATH = os.path.join("data", "master", "uploads_log.csv")
 METRICS_PATH = os.path.join("models", "metrics_summary.csv")
+METRICS_COLUMNS = [
+    "target",
+    "version",
+    "trained",
+    "rows",
+    "mae",
+    "coverage",
+    "interval_width",
+    "qhat",
+    "alpha",
+    "r2",
+]
 
 
 def _load_master():
@@ -90,7 +102,12 @@ def main():
 
         with col2:
             if metrics_df is not None and not metrics_df.empty:
-                trained_ops = metrics_df["target"].nunique()
+                if "trained" in metrics_df.columns:
+                    trained_ops = metrics_df.loc[
+                        metrics_df["trained"].fillna(False), "target"
+                    ].nunique()
+                else:
+                    trained_ops = metrics_df["target"].nunique()
                 st.metric("Operations with models", f"{trained_ops}")
             else:
                 st.metric("Operations with models", "0")
@@ -228,14 +245,24 @@ def main():
             col_perf1, col_perf2 = st.columns(2)
 
             with col_perf1:
-                st.write("MAE by operation")
-                mae_chart = metrics_df[["target", "mae"]].set_index("target")
-                st.bar_chart(mae_chart)
+                if "mae" in metrics_df.columns:
+                    st.write("MAE by operation")
+                    mae_chart = metrics_df[["target", "mae"]].set_index(
+                        "target"
+                    )
+                    st.bar_chart(mae_chart)
+                else:
+                    st.info("MAE metrics not available.")
 
             with col_perf2:
-                st.write("R² by operation")
-                r2_chart = metrics_df[["target", "r2"]].set_index("target")
-                st.bar_chart(r2_chart)
+                if "r2" in metrics_df.columns:
+                    st.write("R² by operation")
+                    r2_chart = metrics_df[["target", "r2"]].set_index(
+                        "target"
+                    )
+                    st.bar_chart(r2_chart)
+                else:
+                    st.info("R² metrics not available.")
 
 
     # Drivers & Similar Projects tab
@@ -684,11 +711,26 @@ def main():
                                     models_dir="models",
                                     version="v1",
                                 )
-                                if m:
-                                    metrics_all.append(m)
+                                if m is None:
+                                    m = {
+                                        "target": target,
+                                        "version": "v1",
+                                        "trained": False,
+                                        "rows": 0,
+                                        "mae": pd.NA,
+                                        "coverage": pd.NA,
+                                        "interval_width": pd.NA,
+                                        "qhat": pd.NA,
+                                        "alpha": pd.NA,
+                                        "r2": pd.NA,
+                                    }
+                                metrics_all.append(m)
 
                             if metrics_all:
                                 metrics_df = pd.DataFrame(metrics_all)
+                                metrics_df = metrics_df.reindex(
+                                    columns=METRICS_COLUMNS
+                                )
                                 os.makedirs("models", exist_ok=True)
                                 metrics_df.to_csv(METRICS_PATH, index=False)
                                 st.session_state["models_ready"] = True
