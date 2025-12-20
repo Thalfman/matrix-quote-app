@@ -279,23 +279,67 @@ def train_one_op_rf(
     return metrics
 
 
-def _predict_with_cqr_artifact(
-    artifact: CQRArtifact, X_df: pd.DataFrame
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    pre = artifact["preprocessor"]
-    X_proc = pre.transform(X_df)
+def _format_confidence(alpha: Optional[float]) -> str:
+    if alpha is None:
+        alpha = DEFAULT_ALPHA
+    confidence = int(round((1 - alpha) * 100))
+    return f"{confidence}% calibrated"
 
-    model_lo = artifact["model_lo"]
-    model_mid = artifact["model_mid"]
-    model_hi = artifact["model_hi"]
-    qhat = artifact["qhat"]
 
-    pred_lo = model_lo.predict(X_proc)
-    pred_mid = model_mid.predict(X_proc)
-    pred_hi = model_hi.predict(X_proc)
-    p10, p90 = cqr.apply_cqr(pred_lo, pred_hi, qhat)
-    std = (p90 - p10) / 2.0
-    return pred_mid, p10, p90, std
+def _is_cqr_artifact(artifact: Any) -> bool:
+    if not isinstance(artifact, dict):
+        return False
+    required_keys = {"preprocessor", "model_lo", "model_mid", "model_hi", "qhat"}
+    return required_keys.issubset(set(artifact.keys()))
+
+
+def predict_target_with_interval(
+    target_artifact: Any,
+    X_df: pd.DataFrame,
+    alpha: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Predict calibrated interval bounds and point estimate for one target.
+    Returns None when a model artifact is missing or invalid.
+    """
+    if target_artifact is None:
+        return None
+
+    if _is_cqr_artifact(target_artifact):
+        pre = target_artifact["preprocessor"]
+        X_proc = pre.transform(X_df)
+
+        model_lo = target_artifact["model_lo"]
+        model_mid = target_artifact["model_mid"]
+        model_hi = target_artifact["model_hi"]
+        qhat = target_artifact["qhat"]
+
+        pred_lo = model_lo.predict(X_proc)
+        pred_mid = model_mid.predict(X_proc)
+        pred_hi = model_hi.predict(X_proc)
+        p10, p90 = cqr.apply_cqr(pred_lo, pred_hi, qhat)
+        std = (p90 - p10) / 3.29
+        return {
+            "p10": p10,
+            "p50": pred_mid,
+            "p90": p90,
+            "std": std,
+            "confidence": _format_confidence(
+                alpha if alpha is not None else target_artifact.get("alpha")
+            ),
+        }
+
+    if isinstance(target_artifact, Pipeline):
+        p50, p10, p90, std = _predict_with_rf_pipeline(target_artifact, X_df)
+        return {
+            "p10": p10,
+            "p50": p50,
+            "p90": p90,
+            "std": std,
+            "confidence": "heuristic",
+        }
+
+    return None
 
 
 def _predict_with_rf_pipeline(
@@ -334,11 +378,17 @@ def load_model(
     if artifact is not None:
         return artifact
     model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
-    return joblib.load(model_path)
+    if not os.path.exists(model_path):
+        return None
+    try:
+        return joblib.load(model_path)
+    except Exception:
+        return None
 
 
 def predict_with_interval(model: Any, X_df: pd.DataFrame):
     """Predict p50/p10/p90/std from either a CQR artifact or RF pipeline."""
-    if isinstance(model, dict) and "model_lo" in model:
-        return _predict_with_cqr_artifact(model, X_df)
-    return _predict_with_rf_pipeline(model, X_df)
+    result = predict_target_with_interval(model, X_df)
+    if result is None:
+        return None
+    return result["p50"], result["p10"], result["p90"], result["std"]

@@ -3,6 +3,7 @@
 
 from typing import Dict
 
+import numpy as np
 import pandas as pd
 
 from core.config import TARGETS, QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
@@ -53,7 +54,11 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
 
     for target in TARGETS:
         pipe = load_model(target)
-        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
+        result = predict_with_interval(pipe, df)
+        if result is None:
+            p50_arr = p10_arr = p90_arr = std_arr = np.array([np.nan])
+        else:
+            p50_arr, p10_arr, p90_arr, std_arr = result
 
         p50 = float(p50_arr[0])
         p10 = float(p10_arr[0])
@@ -96,7 +101,11 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
 
     for target in TARGETS:
         pipe = load_model(target)
-        p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
+        result = predict_with_interval(pipe, df)
+        if result is None:
+            p50_arr = p10_arr = p90_arr = std_arr = np.full(len(df), np.nan)
+        else:
+            p50_arr, p10_arr, p90_arr, std_arr = result
 
         op_name = target.replace("_actual_hours", "")
         df[f"{op_name}_p50"] = p50_arr
