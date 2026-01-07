@@ -464,7 +464,14 @@ with tab_single:
             "Physical scale index (optional)", min_value=0.0
         )
         estimated_materials_cost = st.number_input(
-        "Estimated materials cost", min_value=0.0
+            "Estimated materials cost", min_value=0.0
+        )
+        confidence_level = st.slider(
+            "Confidence level (%)",
+            min_value=50,
+            max_value=95,
+            value=90,
+            step=5,
         )
 
         if st.button("Estimate hours"):
@@ -522,9 +529,7 @@ with tab_single:
                 sales_rows.append(
                     {
                         "Sales bucket": bucket,
-                        "p10_hours": bucket_pred.p10,
                         "p50_hours": bucket_pred.p50,
-                        "p90_hours": bucket_pred.p90,
                         "confidence": bucket_pred.confidence,
                     }
                 )
@@ -538,16 +543,14 @@ with tab_single:
 
             for row in sales_rows:
                 role = row["Sales bucket"]
-                p10 = row["p10_hours"]
                 p50 = row["p50_hours"]
-                p90 = row["p90_hours"]
                 confidence = row["confidence"]
 
                 summary_row = {
                     "Role": role,
                     "Recommended hours (P50)": p50,
-                    "Range (P10–P90)": f"{p10:.1f}–{p90:.1f}",
                     "Confidence": confidence.title(),
+                    "Confidence level": f"{confidence_level}%",
                 }
 
                 if has_quoted_hours:
@@ -604,8 +607,8 @@ with tab_single:
                     total_row = {
                         "Role": "TOTAL",
                         "Recommended hours (P50)": df_sales_summary["Recommended hours (P50)"].sum(),
-                        "Range (P10–P90)": "-",
                         "Confidence": "-",
+                        "Confidence level": f"{confidence_level}%",
                         "Quoted hours": df_sales_summary["Quoted hours"].sum(),
                         "Delta (quoted - model)": df_sales_summary["Delta (quoted - model)"].sum(),
                         "Status": "-",
@@ -619,12 +622,9 @@ with tab_single:
                 rows.append(
                     {
                         "operation": op,
-                        "p10_hours": op_pred.p10,
                         "p50_hours": op_pred.p50,
-                        "p90_hours": op_pred.p90,
-                        "std_hours": op_pred.std,
-                        "rel_width": op_pred.rel_width,
                         "confidence": op_pred.confidence,
+                        "confidence_level": f"{confidence_level}%",
                     }
                 )
             df_out = pd.DataFrame(rows)
@@ -641,12 +641,15 @@ with tab_single:
                     st.caption(project_status)
 
                 st.subheader("Sales-level summary")
+                st.caption(
+                    f"Estimates shown at {confidence_level}% confidence."
+                )
                 if sales_summary_rows_exist and df_sales_summary_sorted is not None:
                     display_cols = [
                         "Role",
                         "Recommended hours (P50)",
-                        "Range (P10–P90)",
                         "Confidence",
+                        "Confidence level",
                     ]
                     if has_quoted_hours:
                         display_cols += [
@@ -685,6 +688,9 @@ with tab_single:
 
             with ops_tab:
                 st.subheader("Per-operation predictions")
+                st.caption(
+                    f"Estimates shown at {confidence_level}% confidence."
+                )
                 st.dataframe(df_out)
 
 
