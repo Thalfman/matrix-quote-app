@@ -91,13 +91,47 @@ def _compute_indices_inplace(df: pd.DataFrame) -> None:
     )
 
 
+def _apply_common_transforms(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Shared transformations for both training and quote-time data:
+    - Convert boolean string columns to 0/1.
+    - Coerce numeric features.
+    - Compute composite indices.
+    - Derive log_quoted_materials_cost if missing.
+    """
+    for col in _BOOL_STR_COLS:
+        if col in df.columns:
+            df[col] = _to_bool01(df[col])
+
+    for col in QUOTE_NUM_FEATURES:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    _compute_indices_inplace(df)
+
+    if (
+        "log_quoted_materials_cost" not in df.columns
+        or df["log_quoted_materials_cost"].isna().all()
+    ):
+        if "quoted_materials_cost" in df.columns:
+            raw = (
+                df["quoted_materials_cost"]
+                .astype(str)
+                .replace(r"[\$,]", "", regex=True)
+            )
+            raw = pd.to_numeric(raw, errors="coerce").fillna(0)
+            df["log_quoted_materials_cost"] = np.log1p(raw)
+        else:
+            df["log_quoted_materials_cost"] = 0.0
+
+    return df
+
+
 def engineer_features_for_training(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare the project-hours dataset for training:
     - Filter to include_in_training + actuals.
-    - Convert flags to 0/1.
-    - Compute indices.
-    - Compute log materials cost if needed.
+    - Apply common feature transforms.
     """
     df = df_raw.copy()
 
@@ -113,72 +147,15 @@ def engineer_features_for_training(df_raw: pd.DataFrame) -> pd.DataFrame:
         )
         df = df[df["dataset_role"] == "actuals"].copy()
 
-    for col in _BOOL_STR_COLS:
-        if col in df.columns:
-            df[col] = _to_bool01(df[col])
-
-    # Force numeric on the quote-time numeric features (if present)
-    for col in QUOTE_NUM_FEATURES:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    _compute_indices_inplace(df)
-
-    # If log cost is missing, derive it from quoted_materials_cost if possible.
-    if (
-        "log_quoted_materials_cost" not in df.columns
-        or df["log_quoted_materials_cost"].isna().all()
-    ):
-        if "quoted_materials_cost" in df.columns:
-            raw = (
-                df["quoted_materials_cost"]
-                .astype(str)
-                .replace(r"[\$,]", "", regex=True)
-            )
-            raw = pd.to_numeric(raw, errors="coerce").fillna(0)
-            df["log_quoted_materials_cost"] = np.log1p(raw)
-        else:
-            df["log_quoted_materials_cost"] = 0.0
-
-    return df
+    return _apply_common_transforms(df)
 
 
 def prepare_quote_features(df_quote: pd.DataFrame) -> pd.DataFrame:
     """
-    Apply the same basic transformations to quote-time inputs:
-    - Flags to 0/1.
-    - Numeric coercion.
-    - Indices.
-    - log_quoted_materials_cost.
+    Apply the same feature transforms to quote-time inputs.
     """
     df = df_quote.copy()
-
-    for col in _BOOL_STR_COLS:
-        if col in df.columns:
-            df[col] = _to_bool01(df[col])
-
-    for col in QUOTE_NUM_FEATURES:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    _compute_indices_inplace(df)
-
-    if (
-        "log_quoted_materials_cost" not in df.columns
-        or df["log_quoted_materials_cost"].isna().all()
-    ):
-        if "quoted_materials_cost" in df.columns:
-            raw = (
-                df["quoted_materials_cost"]
-                .astype(str)
-                .replace(r"[\$,]", "", regex=True)
-            )
-            raw = pd.to_numeric(raw, errors="coerce").fillna(0)
-            df["log_quoted_materials_cost"] = np.log1p(raw)
-        else:
-            df["log_quoted_materials_cost"] = 0.0
-
-    return df
+    return _apply_common_transforms(df)
 
 
 def build_training_data(df_master: pd.DataFrame, target_col: str):

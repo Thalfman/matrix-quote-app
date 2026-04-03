@@ -170,6 +170,7 @@ def train_one_op(
 
     train_pool = _make_pool(X_train, feature_names, cat_features, y_train)
     calib_pool = _make_pool(X_calib, feature_names, cat_features)
+    calib_pool_labeled = _make_pool(X_calib, feature_names, cat_features, y_calib)
     eval_df = X_test if X_test is not None else X_calib
     eval_y = y_test if X_test is not None else y_calib
     eval_pool = _make_pool(eval_df, feature_names, cat_features)
@@ -182,10 +183,11 @@ def train_one_op(
         "thread_count": -1,
         "allow_writing_files": False,
         "verbose": False,
+        "early_stopping_rounds": 50,
     }
 
     point_model = CatBoostRegressor(loss_function="Quantile:alpha=0.50", **base_params)
-    point_model.fit(train_pool)
+    point_model.fit(train_pool, eval_set=calib_pool_labeled)
 
     intervals: Dict[float, IntervalModel] = {}
     coverage_metrics: Dict[str, float] = {}
@@ -206,8 +208,8 @@ def train_one_op(
             loss_function=f"Quantile:alpha={q_hi}", **base_params
         )
 
-        model_lo.fit(train_pool)
-        model_hi.fit(train_pool)
+        model_lo.fit(train_pool, eval_set=calib_pool_labeled)
+        model_hi.fit(train_pool, eval_set=calib_pool_labeled)
 
         lo_hat = model_lo.predict(calib_pool)
         hi_hat = model_hi.predict(calib_pool)
@@ -310,9 +312,90 @@ def predict_with_interval(
     return _calibrated_bounds(estimate_raw, lo_raw, hi_raw, interval.qhat)
 
 
+def _current_version(models_dir: str = "models") -> str:
+    """Read the current model version from the version file, defaulting to 'v1'."""
+    version_path = os.path.join(models_dir, "current_version.txt")
+    if os.path.exists(version_path):
+        return open(version_path).read().strip()
+    return "v1"
+
+
 def load_model(
-    target: str, version: str = "v1", models_dir: str = "models"
+    target: str, version: str = "", models_dir: str = "models"
 ) -> CatBoostCQRBundle:
     """Load a persisted model or bundle for a given operation."""
+    if not version:
+        version = _current_version(models_dir)
     model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
     return joblib.load(model_path)
+
+
+def load_model_cached(
+    target: str, version: str = "", models_dir: str = "models"
+) -> CatBoostCQRBundle:
+    """Load a model with in-memory caching (keyed by path + mtime)."""
+    if not version:
+        version = _current_version(models_dir)
+    model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
+    mtime = os.path.getmtime(model_path)
+    return _load_model_from_cache(model_path, mtime)
+
+
+# Module-level LRU cache keyed on (path, mtime) so stale models are evicted on retrain.
+from functools import lru_cache
+
+
+@lru_cache(maxsize=32)
+def _load_model_from_cache(model_path: str, mtime: float) -> CatBoostCQRBundle:
+    return joblib.load(model_path)
+
+
+def get_feature_importance(
+    bundle: CatBoostCQRBundle,
+    df_master: Optional[pd.DataFrame] = None,
+) -> Optional[pd.DataFrame]:
+    """
+    Return a DataFrame with columns ['feature', 'importance'] sorted descending,
+    or None if importance cannot be computed.
+    """
+    if not isinstance(bundle, CatBoostCQRBundle):
+        return None
+
+    cb_model = getattr(bundle, "point_model", None) or bundle.__dict__.get("model_mid")
+    if cb_model is None:
+        return None
+
+    feature_names = getattr(bundle, "feature_names", [])
+    if not feature_names:
+        return None
+
+    try:
+        importances = cb_model.get_feature_importance()
+    except Exception:
+        if df_master is None:
+            return None
+        try:
+            cat_feature_names = getattr(bundle, "cat_feature_names", [])
+            df_pool_source = (
+                df_master.sample(n=min(len(df_master), 5000), random_state=42)
+                if len(df_master) > 5000
+                else df_master
+            )
+            df_pool = df_pool_source.copy()
+            for col in feature_names:
+                if col not in df_pool.columns:
+                    df_pool[col] = 0
+            _prepare_cat_features_inplace(df_pool, cat_feature_names)
+            pool = _make_pool(df_pool, feature_names, cat_feature_names)
+            importances = cb_model.get_feature_importance(pool)
+        except Exception:
+            return None
+
+    if len(feature_names) != len(importances):
+        return None
+
+    return (
+        pd.DataFrame({"feature": feature_names, "importance": importances})
+        .sort_values("importance", ascending=False)
+        .reset_index(drop=True)
+    )

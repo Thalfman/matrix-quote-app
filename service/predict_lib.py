@@ -18,7 +18,7 @@ from core.config import (
     TARGETS,
 )
 from core.features import prepare_quote_features
-from core.models import load_model, predict_with_interval
+from core.models import load_model_cached, predict_with_interval
 from core.schemas import (
     OpPrediction,
     QuoteInput,
@@ -29,7 +29,7 @@ from core.schemas import (
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     """Convert QuoteInput into a one-row DataFrame with the expected columns."""
-    data = q.dict()
+    data = q.model_dump()
     cols = list(set(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES))
     row = {c: data.get(c, None) for c in cols}
     df = pd.DataFrame([row])
@@ -63,7 +63,7 @@ def predict_quote(
     total_estimate = total_lo = total_hi = 0.0
 
     for target in TARGETS:
-        model_obj = load_model(target)
+        model_obj = load_model_cached(target)
         preds = predict_with_interval(model_obj, df, confidence_level)
 
         estimate = float(preds["estimate"][0])
@@ -138,7 +138,7 @@ def predict_quotes_df(
     }
 
     for target in TARGETS:
-        bundle = load_model(target)
+        bundle = load_model_cached(target)
         preds = predict_with_interval(bundle, df, confidence_level)
 
         op_name = target.replace("_actual_hours", "")

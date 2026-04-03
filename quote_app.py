@@ -27,8 +27,7 @@ from core.schemas import QuoteInput
 from core.features import engineer_features_for_training
 from core.models import (
     CatBoostCQRBundle,
-    _make_pool,
-    _prepare_cat_features_inplace,
+    get_feature_importance,
     load_model,
     train_one_op,
 )
@@ -37,6 +36,25 @@ from service.predict_lib import predict_quote, predict_quotes_df
 MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")
 UPLOADS_LOG_PATH = os.path.join("data", "master", "uploads_log.csv")
 METRICS_PATH = os.path.join("models", "metrics_summary.csv")
+VERSION_PATH = os.path.join("models", "current_version.txt")
+
+
+def _current_model_version() -> str:
+    """Read the current model version string, defaulting to 'v1'."""
+    if os.path.exists(VERSION_PATH):
+        return open(VERSION_PATH).read().strip()
+    return "v1"
+
+
+def _next_model_version() -> str:
+    """Increment and persist the model version counter."""
+    current = _current_model_version()
+    num = int(current.lstrip("v")) if current.startswith("v") and current[1:].isdigit() else 0
+    new_version = f"v{num + 1}"
+    os.makedirs(os.path.dirname(VERSION_PATH), exist_ok=True)
+    with open(VERSION_PATH, "w") as f:
+        f.write(new_version)
+    return new_version
 
 st.set_page_config(page_title="Matrix Quote App", layout="wide")
 st.title("Matrix Quote App")
@@ -94,8 +112,8 @@ def _load_metrics():
 
 def _reset_app_state():
     """Delete master dataset, upload log, and model artifacts; reset models_ready."""
-    # Remove master dataset, upload log, and metrics file if present
-    for path in [MASTER_DATA_PATH, UPLOADS_LOG_PATH, METRICS_PATH]:
+    # Remove master dataset, upload log, metrics, and version file if present
+    for path in [MASTER_DATA_PATH, UPLOADS_LOG_PATH, METRICS_PATH, VERSION_PATH]:
         if os.path.exists(path):
             os.remove(path)
 
@@ -304,10 +322,11 @@ with tab_drivers:
         with col_dr1:
             st.subheader("Global drivers by operation")
 
+            _ver = _current_model_version()
             modeled_ops = [
                 t
                 for t in TARGETS
-                if os.path.exists(os.path.join("models", f"{t}_v1.joblib"))
+                if os.path.exists(os.path.join("models", f"{t}_{_ver}.joblib"))
             ]
             if not modeled_ops:
                 st.info("No trained models found in ./models.")
@@ -317,69 +336,10 @@ with tab_drivers:
                 )
 
                 model_obj = load_model(target_choice)
-                fi_df = pd.DataFrame()
-
-                if isinstance(model_obj, CatBoostCQRBundle):
-                    feature_names = getattr(model_obj, "feature_names", [])
-                    cat_feature_names = getattr(model_obj, "cat_feature_names", [])
-
-                    cb_model = getattr(model_obj, "point_model", None) or model_obj.__dict__.get(
-                        "model_mid"
-                    )
-
-                    if cb_model is None:
-                        st.error(
-                            "CatBoost bundle does not contain a usable model (missing point_model/model_mid)."
-                        )
-                    else:
-                        try:
-                            importances = cb_model.get_feature_importance()
-                        except Exception:
-                            try:
-                                if not feature_names:
-                                    raise ValueError(
-                                        "Feature names unavailable to compute importance."
-                                    )
-                                df_pool_source = (
-                                    df_master.sample(
-                                        n=min(len(df_master), 5000), random_state=42
-                                    )
-                                    if len(df_master) > 5000
-                                    else df_master
-                                )
-                                df_pool = df_pool_source.copy()
-                                for col in feature_names:
-                                    if col not in df_pool.columns:
-                                        df_pool[col] = 0
-                                _prepare_cat_features_inplace(
-                                    df_pool, cat_feature_names
-                                )
-                                pool = _make_pool(
-                                    df_pool, feature_names, cat_feature_names
-                                )
-                                importances = cb_model.get_feature_importance(pool)
-                            except Exception as fi_err:
-                                st.error(
-                                    f"Could not compute feature importance for {target_choice}: {fi_err}"
-                                )
-                                importances = []
-
-                        if feature_names and len(feature_names) == len(importances):
-                            fi_df = (
-                                pd.DataFrame(
-                                    {"feature": feature_names, "importance": importances}
-                                )
-                                .sort_values("importance", ascending=False)
-                                .reset_index(drop=True)
-                            )
-                        elif feature_names:
-                            st.warning(
-                                "Feature importance could not be aligned with feature names."
-                            )
-                        else:
-                            st.info("Feature names unavailable for importance display.")
-                else:
-                    st.error("Only CatBoost CQR models are supported.")
+                fi_df = get_feature_importance(model_obj, df_master)
+                if fi_df is None:
+                    fi_df = pd.DataFrame()
+                    st.info("Feature importance is unavailable for the selected model.")
 
                 if not fi_df.empty:
                     st.write("Top 15 features by importance")
@@ -480,79 +440,93 @@ with tab_single:
         )
         confidence_level = confidence_pct / 100.0
 
-        industry_segment = st.selectbox(
-            "Industry segment",
-            ["Automotive", "Food & Beverage", "General Industry"],
-        )
-        system_category = st.selectbox(
-            "System category",
-            ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
-        )
-        automation_level = st.selectbox(
-            "Automation level",
-            ["Semi-Automatic", "Robotic", "Hard Automation"],
-        )
-        plc_family = st.text_input("PLC family", "AB Compact Logix")
-        hmi_family = st.text_input("HMI family", "AB PanelView Plus")
-        vision_type = st.text_input("Vision type", "None")
+        # -- Project basics --
+        with st.expander("Project basics", expanded=True):
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                industry_segment = st.selectbox(
+                    "Industry segment",
+                    ["Automotive", "Food & Beverage", "General Industry"],
+                    help="The customer's primary industry.",
+                )
+                system_category = st.selectbox(
+                    "System category",
+                    ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
+                    help="Type of automation system being quoted.",
+                )
+                automation_level = st.selectbox(
+                    "Automation level",
+                    ["Semi-Automatic", "Robotic", "Hard Automation"],
+                    help="Degree of automation in the system.",
+                )
+            with col_b2:
+                plc_family = st.text_input("PLC family", "AB Compact Logix")
+                hmi_family = st.text_input("HMI family", "AB PanelView Plus")
+                vision_type = st.text_input("Vision type", "None")
 
-        stations_count = st.number_input("Stations count", min_value=0, step=1)
-        robot_count = st.number_input("Robot count", min_value=0, step=1)
-        fixture_sets = st.number_input("Fixture sets", min_value=0, step=1)
-        part_types = st.number_input("Part types", min_value=0, step=1)
-        servo_axes = st.number_input("Servo axes", min_value=0, step=1)
-        pneumatic_devices = st.number_input("Pneumatic devices", min_value=0, step=1)
-        safety_doors = st.number_input("Safety doors", min_value=0, step=1)
-        weldment_perimeter_ft = st.number_input(
-            "Weldment perimeter (ft)", min_value=0.0
-        )
-        fence_length_ft = st.number_input("Fence length (ft)", min_value=0.0)
-        conveyor_length_ft = st.number_input("Conveyor length (ft)", min_value=0.0)
-        product_familiarity_score = st.slider(
-            "Product familiarity (1–5)", 1, 5, 3
-        )
-        product_rigidity = st.slider("Product rigidity (1–5)", 1, 5, 3)
-        is_product_deformable = st.checkbox("Product deformable?")
-        is_bulk_product = st.checkbox("Bulk product?")
-        bulk_rigidity_score = st.slider("Bulk rigidity score (1–5)", 1, 5, 3)
-        has_tricky_packaging = st.checkbox("Tricky packaging?")
-        process_uncertainty_score = st.slider(
-            "Process uncertainty (1–5)", 1, 5, 3
-        )
-        changeover_time_min = st.number_input(
-            "Changeover time (min)", min_value=0.0
-        )
-        safety_devices_count = st.number_input(
-            "Safety devices count", min_value=0, step=1
-        )
-        custom_pct = st.slider("Custom %", 0, 100, 50)
-        duplicate = st.checkbox("Duplicate of prior project?")
-        has_controls = st.checkbox("Includes controls work?", value=True)
-        has_robotics = st.checkbox("Includes robotics work?", value=True)
-        retrofit = st.checkbox("Retrofit project?")
-        complexity_score_1_5 = st.slider(
-            "Overall complexity (1–5)", 1, 5, 3
-        )
-        vision_systems_count = st.number_input(
-            "Vision systems count", min_value=0, step=1
-        )
-        panel_count = st.number_input("Panel count", min_value=0, step=1)
-        drive_count = st.number_input("Drive count", min_value=0, step=1)
-        stations_robot_index = st.number_input(
-            "Stations/Robot index (optional)", min_value=0.0
-        )
-        mech_complexity_index = st.number_input(
-            "Mechanical complexity index (optional)", min_value=0.0
-        )
-        controls_complexity_index = st.number_input(
-            "Controls complexity index (optional)", min_value=0.0
-        )
-        physical_scale_index = st.number_input(
-            "Physical scale index (optional)", min_value=0.0
-        )
-        estimated_materials_cost = st.number_input(
-        "Estimated materials cost", min_value=0.0
-        )
+        # -- Mechanical specifications --
+        with st.expander("Mechanical specifications"):
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                stations_count = st.number_input("Stations count", min_value=0, step=1, help="Number of stations in the system.")
+                robot_count = st.number_input("Robot count", min_value=0, step=1, help="Number of robots in the system.")
+                fixture_sets = st.number_input("Fixture sets", min_value=0, step=1, help="Number of fixture tooling sets.")
+                part_types = st.number_input("Part types", min_value=0, step=1, help="Number of distinct part types handled.")
+                servo_axes = st.number_input("Servo axes", min_value=0, step=1, help="Total servo-driven axes.")
+            with col_m2:
+                pneumatic_devices = st.number_input("Pneumatic devices", min_value=0, step=1, help="Clamps, grippers, cylinders, etc.")
+                safety_doors = st.number_input("Safety doors", min_value=0, step=1)
+                weldment_perimeter_ft = st.number_input("Weldment perimeter (ft)", min_value=0.0)
+                fence_length_ft = st.number_input("Fence length (ft)", min_value=0.0)
+                conveyor_length_ft = st.number_input("Conveyor length (ft)", min_value=0.0)
+
+        # -- Controls & electrical --
+        with st.expander("Controls & electrical"):
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                vision_systems_count = st.number_input("Vision systems count", min_value=0, step=1)
+                panel_count = st.number_input("Panel count", min_value=0, step=1)
+                drive_count = st.number_input("Drive count", min_value=0, step=1)
+            with col_c2:
+                has_controls = st.checkbox("Includes controls work?", value=True)
+                has_robotics = st.checkbox("Includes robotics work?", value=True)
+                safety_devices_count = st.number_input("Safety devices count", min_value=0, step=1)
+
+        # -- Product & process characteristics --
+        with st.expander("Product & process characteristics"):
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                product_familiarity_score = st.slider("Product familiarity (1–5)", 1, 5, 3, help="1 = completely new, 5 = very familiar product.")
+                product_rigidity = st.slider("Product rigidity (1–5)", 1, 5, 3, help="1 = very flexible, 5 = rigid.")
+                is_product_deformable = st.checkbox("Product deformable?")
+                is_bulk_product = st.checkbox("Bulk product?")
+                bulk_rigidity_score = st.slider("Bulk rigidity score (1–5)", 1, 5, 3)
+            with col_p2:
+                has_tricky_packaging = st.checkbox("Tricky packaging?")
+                process_uncertainty_score = st.slider("Process uncertainty (1–5)", 1, 5, 3, help="1 = well-understood process, 5 = highly uncertain.")
+                changeover_time_min = st.number_input("Changeover time (min)", min_value=0.0)
+
+        # -- Project scope --
+        with st.expander("Project scope"):
+            col_s1, col_s2 = st.columns(2)
+            with col_s1:
+                custom_pct = st.slider("Custom %", 0, 100, 50, help="Percentage of custom (non-standard) content.")
+                complexity_score_1_5 = st.slider("Overall complexity (1–5)", 1, 5, 3, help="1 = simple, 5 = very complex.")
+            with col_s2:
+                duplicate = st.checkbox("Duplicate of prior project?")
+                retrofit = st.checkbox("Retrofit project?")
+                estimated_materials_cost = st.number_input("Estimated materials cost ($)", min_value=0.0)
+
+        # -- Quoted hours comparison (optional) --
+        with st.expander("Your quoted hours (optional — for comparison)"):
+            st.caption("Enter your manually estimated hours per role to compare against the model's prediction.")
+            qh_cols = st.columns(3)
+            quoted_hours_by_bucket = {}
+            for i, bucket in enumerate(SALES_BUCKETS):
+                with qh_cols[i % 3]:
+                    val = st.number_input(f"{bucket} hours", min_value=0.0, value=0.0, step=1.0, key=f"qh_{bucket}")
+                    if val > 0:
+                        quoted_hours_by_bucket[bucket] = val
 
         if st.button("Estimate hours"):
 
@@ -593,10 +567,6 @@ with tab_single:
                 vision_systems_count=vision_systems_count,
                 panel_count=panel_count,
                 drive_count=drive_count,
-                stations_robot_index=stations_robot_index,
-                mech_complexity_index=mech_complexity_index,
-                controls_complexity_index=controls_complexity_index,
-                physical_scale_index=physical_scale_index,
                 log_quoted_materials_cost=log_cost,
             )
             pred = predict_quote(q, confidence_level=confidence_level)
@@ -616,10 +586,7 @@ with tab_single:
                     }
                 )
 
-            has_quoted_hours = False
-            quoted_hours_by_bucket = st.session_state.get("quoted_hours_by_bucket")
-            if isinstance(quoted_hours_by_bucket, dict) and quoted_hours_by_bucket:
-                has_quoted_hours = True
+            has_quoted_hours = bool(quoted_hours_by_bucket)
 
             sales_summary_rows = []
 
@@ -782,6 +749,55 @@ with tab_single:
                 st.subheader("Per-operation predictions")
                 st.dataframe(df_out)
 
+            # Export single quote results
+            st.markdown("---")
+            export_rows = []
+            for op, op_pred in pred.ops.items():
+                export_rows.append({
+                    "level": "operation",
+                    "name": op,
+                    "estimate_hours": op_pred.estimate,
+                    "lo_hours": op_pred.lo,
+                    "hi_hours": op_pred.hi,
+                    "plus_minus_hours": op_pred.plus_minus,
+                    "confidence": f"{confidence_pct}%",
+                })
+            for bucket in SALES_BUCKETS:
+                bp = pred.sales_buckets.get(bucket)
+                if bp:
+                    export_rows.append({
+                        "level": "sales_bucket",
+                        "name": bucket,
+                        "estimate_hours": bp.estimate,
+                        "lo_hours": bp.lo,
+                        "hi_hours": bp.hi,
+                        "plus_minus_hours": bp.plus_minus,
+                        "confidence": f"{confidence_pct}%",
+                    })
+            export_rows.append({
+                "level": "total",
+                "name": "PROJECT TOTAL",
+                "estimate_hours": pred.total_estimate,
+                "lo_hours": pred.total_lo,
+                "hi_hours": pred.total_hi,
+                "plus_minus_hours": pred.total_plus_minus,
+                "confidence": f"{confidence_pct}%",
+            })
+            df_export = pd.DataFrame(export_rows)
+            csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download quote as CSV",
+                data=csv_bytes,
+                file_name=f"single_quote_{confidence_pct}.csv",
+                mime="text/csv",
+            )
+
+            st.caption(
+                "Note: Sales bucket and total intervals are computed by summing "
+                "per-operation bounds. Actual coverage may differ from the stated "
+                "confidence level for aggregated totals."
+            )
+
 
 # Batch Quotes tab
 with tab_batch:
@@ -822,13 +838,26 @@ with tab_batch:
             st.subheader("Input preview")
             st.dataframe(df_in.head())
 
-            required_cols = set(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)
-            missing = [c for c in required_cols if c not in df_in.columns]
+            # Fill missing numeric columns with 0 and missing categorical with defaults
+            _cat_defaults = {
+                "industry_segment": "General Industry",
+                "system_category": "Other",
+                "automation_level": "Semi-Automatic",
+                "plc_family": "AB Compact Logix",
+                "hmi_family": "AB PanelView Plus",
+                "vision_type": "None",
+            }
+            missing_num = [c for c in QUOTE_NUM_FEATURES if c not in df_in.columns]
+            missing_cat = [c for c in QUOTE_CAT_FEATURES if c not in df_in.columns]
+            for c in missing_num:
+                df_in[c] = 0
+            for c in missing_cat:
+                df_in[c] = _cat_defaults.get(c, "unknown")
 
-            if missing:
-                st.error(f"Missing required columns: {missing}")
-            else:
-                if st.button("Run predictions on all rows"):
+            if missing_num or missing_cat:
+                st.info(f"Filled {len(missing_num + missing_cat)} missing columns with defaults: {missing_num + missing_cat}")
+
+            if st.button("Run predictions on all rows"):
                     df_out = predict_quotes_df(df_in, confidence_level=confidence_level_batch)
                     st.subheader("Output preview")
                     st.dataframe(df_out.head())
@@ -955,13 +984,14 @@ with tab_admin:
                             df_log_new = log_row
                         df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
 
+                        new_version = _next_model_version()
                         metrics_all = []
                         for target in TARGETS:
                             m = train_one_op(
                                 df_master_new,
                                 target,
                                 models_dir="models",
-                                version="v1",
+                                version=new_version,
                             )
                             if m:
                                 metrics_all.append(m)
@@ -1002,7 +1032,11 @@ with tab_admin:
     st.markdown("---")
     st.subheader("Reset app state")
 
-    if st.button("Reset master dataset and models"):
+    confirm_reset = st.checkbox(
+        "I understand this will permanently delete all uploaded data and trained models.",
+        key="confirm_reset",
+    )
+    if st.button("Reset master dataset and models", disabled=not confirm_reset):
         _reset_app_state()
         st.success(
             "Master dataset, upload log, and model artifacts have been cleared. "
