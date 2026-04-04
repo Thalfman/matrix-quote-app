@@ -1,12 +1,16 @@
 # quote_app.py
-# Streamlit UI with:
-# - Overview
-# - Data Explorer
-# - Model Performance
-# - Drivers & Similar Projects
-# - Single Quote
-# - Batch Quotes
-# - Admin: Upload & Train
+# Main Streamlit application for the Matrix Quote App.
+# Provides a 7-tab UI for uploading project data, training ML models,
+# and generating single or batch hour estimates using CatBoost CQR models.
+#
+# Tabs:
+#   1. Overview        – KPI dashboard (project count, trained models, avg MAE)
+#   2. Data Explorer   – Filter and visualize the master training dataset
+#   3. Model Performance – Per-operation metrics (MAE, R², coverage)
+#   4. Drivers & Similar – Feature importance charts + similar project finder
+#   5. Single Quote    – Interactive form to quote one project at a time
+#   6. Batch Quotes    – Upload CSV/Excel to quote many projects at once
+#   7. Admin           – Upload training data, retrain models, reset state
 
 import os
 import math
@@ -33,10 +37,12 @@ from core.models import (
 )
 from service.predict_lib import predict_quote, predict_quotes_df
 
-MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")
-UPLOADS_LOG_PATH = os.path.join("data", "master", "uploads_log.csv")
-METRICS_PATH = os.path.join("models", "metrics_summary.csv")
-VERSION_PATH = os.path.join("models", "current_version.txt")
+# ── File paths for persistent app state ──
+# All of these are git-ignored and created at runtime.
+MASTER_DATA_PATH = os.path.join("data", "master", "projects_master.parquet")  # combined training data
+UPLOADS_LOG_PATH = os.path.join("data", "master", "uploads_log.csv")          # log of each upload
+METRICS_PATH = os.path.join("models", "metrics_summary.csv")                  # per-op training metrics
+VERSION_PATH = os.path.join("models", "current_version.txt")                  # current model version tag
 
 
 def _current_model_version() -> str:
@@ -56,14 +62,16 @@ def _next_model_version() -> str:
         f.write(new_version)
     return new_version
 
+# ── Page config and session bootstrap ──
 st.set_page_config(page_title="Matrix Quote App", layout="wide")
 st.title("Matrix Quote App")
 
+# Track whether trained models are available. This gates the Single/Batch quote tabs.
 if "models_ready" not in st.session_state:
     st.session_state["models_ready"] = False
 
-# If this is a new session but models/metrics already exist on disk,
-# mark models as ready so Single/Batch are usable without retraining.
+# On a fresh browser session, check if models were previously trained and still on disk.
+# This lets users refresh the page without needing to retrain.
 if not st.session_state["models_ready"]:
     if os.path.exists(METRICS_PATH):
         try:
@@ -73,6 +81,7 @@ if not st.session_state["models_ready"]:
         except Exception:
             pass
 
+# ── Create the 7-tab layout ──
 tabs = st.tabs(
     [
         "Overview",
@@ -132,13 +141,18 @@ def _reset_app_state():
     st.session_state["models_ready"] = False
 
 
-# Overview tab: high-level status
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1: Overview — high-level KPI dashboard
+# Shows three metrics cards (project count, trained ops, average MAE) and
+# two side-by-side panels for upload history and the latest metrics snapshot.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
     st.header("Overview")
 
     df_master = _load_master()
     metrics_df = _load_metrics()
 
+    # Display three KPI metric cards across the top of the tab
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -163,6 +177,7 @@ with tab_overview:
 
     st.markdown("---")
 
+    # Two-column layout: upload log on the left, metrics snapshot on the right
     colA, colB = st.columns(2)
 
     with colA:
@@ -181,7 +196,11 @@ with tab_overview:
             st.info("No models trained yet. Use the Admin tab after uploading data.")
 
 
-# Data Explorer tab: explore master dataset
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2: Data Explorer — browse and filter the master training dataset.
+# Users can filter by industry/system, view a preview table, and see
+# per-operation bar charts and scatter plots.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_data:
     st.header("Data Explorer")
 
@@ -220,6 +239,7 @@ with tab_data:
                 else []
             )
 
+        # Apply the selected filters to narrow the dataset
         df_filtered = df_master.copy()
         if industries and sel_industries:
             df_filtered = df_filtered[
@@ -235,6 +255,8 @@ with tab_data:
 
         st.markdown("---")
 
+        # Per-operation visualizations: let the user pick an operation and see
+        # a bar chart of hours by project and a scatter plot vs robot_count
         ops_with_data = [t for t in TARGETS if t in df_filtered.columns]
         if ops_with_data:
             op_choice = st.selectbox("Select operation to explore", ops_with_data)
@@ -264,7 +286,11 @@ with tab_data:
 
 
 
-# Model Performance tab: show per-op metrics
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3: Model Performance — per-operation accuracy and calibration metrics.
+# Shows a raw metrics table, MAE and R² bar charts, and a coverage vs target
+# comparison table that helps assess whether the CQR intervals are well-calibrated.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_perf:
     st.header("Model Performance")
 
@@ -288,6 +314,8 @@ with tab_perf:
             st.bar_chart(r2_chart)
 
         st.markdown("---")
+        # Build a pivot table comparing target confidence (80/90/95%) against the
+        # achieved coverage and average interval width for each operation
         st.subheader("Coverage target vs achieved")
 
         coverage_rows = []
@@ -308,7 +336,13 @@ with tab_perf:
         st.dataframe(df_cov)
 
 
-# Drivers & Similar Projects tab
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4: Drivers & Similar Projects
+# Left column: shows CatBoost feature importance for a selected operation
+#   (which inputs most influence the model's hour prediction).
+# Right column: filter-based search to find historical projects similar to
+#   the one being quoted (by industry, system type, robot count range).
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_drivers:
     st.header("Drivers & Similar Projects")
 
@@ -322,6 +356,7 @@ with tab_drivers:
         with col_dr1:
             st.subheader("Global drivers by operation")
 
+            # Find which operations have trained model files on disk for the current version
             _ver = _current_model_version()
             modeled_ops = [
                 t
@@ -335,6 +370,7 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
+                # Load the selected operation's model and extract feature importance scores
                 model_obj = load_model(target_choice)
                 fi_df = get_feature_importance(model_obj, df_master)
                 if fi_df is None:
@@ -383,6 +419,7 @@ with tab_drivers:
                 "Max robot_count", min_value=0, value=10, step=1
             )
 
+            # Apply filters to find projects matching the user's criteria
             if st.button("Find similar projects"):
                 df_sim = df_master.copy()
 
@@ -404,6 +441,7 @@ with tab_drivers:
                         & (df_sim["robot_count"] <= max_robots)
                     ]
 
+                # Show a compact table with key identifying columns + the first hours column
                 st.write(f"Found {len(df_sim)} similar projects")
                 cols_to_show = [
                     c
@@ -424,7 +462,16 @@ with tab_drivers:
                 st.dataframe(df_sim[cols_to_show].head(50))
 
 
-# Single Quote tab
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5: Single Quote — interactive form for quoting one project.
+# The form is organized into collapsible expanders by category.
+# Derived composite indices (stations_robot_index, etc.) are NOT shown here
+# because they are auto-computed by prepare_quote_features() during prediction.
+# After the user clicks "Estimate hours", results are shown in two sub-tabs:
+#   - Sales view: aggregated by Sales bucket (ME, EE, PM, etc.) with optional
+#     comparison against the user's manually quoted hours.
+#   - Operations view: raw per-operation predictions.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_single:
     st.header("Single quote estimation")
 
@@ -528,8 +575,12 @@ with tab_single:
                     if val > 0:
                         quoted_hours_by_bucket[bucket] = val
 
+        # ── Run prediction ──
+        # Assemble all form inputs into a QuoteInput object, run all 12 operation
+        # models, and display the results in Sales and Operations sub-tabs.
         if st.button("Estimate hours"):
 
+            # Log-transform the materials cost to match the training feature
             log_cost = float(math.log1p(estimated_materials_cost))
 
             q = QuoteInput(
@@ -569,8 +620,10 @@ with tab_single:
                 drive_count=drive_count,
                 log_quoted_materials_cost=log_cost,
             )
+            # predict_quote runs all 12 CatBoost models and returns per-op + aggregated results
             pred = predict_quote(q, confidence_level=confidence_level)
 
+            # Collect Sales bucket predictions into a list for the summary table
             sales_rows = []
             for bucket in SALES_BUCKETS:
                 bucket_pred = pred.sales_buckets.get(bucket)
@@ -588,6 +641,8 @@ with tab_single:
 
             has_quoted_hours = bool(quoted_hours_by_bucket)
 
+            # Build the sales summary table. If the user entered their own quoted hours,
+            # add comparison columns showing the delta and a status label (Close/Over/Under).
             sales_summary_rows = []
 
             for row in sales_rows:
@@ -625,6 +680,7 @@ with tab_single:
                         )
                 sales_summary_rows.append(summary_row)
 
+            # Build the project-level summary metrics (displayed as metric cards at the top)
             total_model_hours = pred.total_estimate
             project_cols = ["Model total (estimate)", f"{confidence_pct}% interval", "± hours"]
             project_values = [
@@ -634,6 +690,7 @@ with tab_single:
             ]
             project_status = None
 
+            # If the user entered their own quoted hours, add total-level comparison
             if has_quoted_hours:
                 total_quoted = sum(
                     v for v in quoted_hours_by_bucket.values() if isinstance(v, (int, float))
@@ -650,6 +707,8 @@ with tab_single:
                 else:
                     project_status = "Quoted hours below model"
 
+            # Sort the sales summary by estimated hours (highest first) and optionally
+            # append a TOTAL row if the user provided their own quoted hours for comparison
             sales_summary_rows_exist = bool(sales_summary_rows)
             df_sales_summary_sorted = None
             if sales_summary_rows_exist:
@@ -672,6 +731,7 @@ with tab_single:
                         [df_sales_summary_sorted, pd.DataFrame([total_row])], ignore_index=True
                     )
 
+            # Build the per-operation detail table for the Operations sub-tab
             rows = []
             for op, op_pred in pred.ops.items():
                 rows.append(
@@ -687,6 +747,7 @@ with tab_single:
                 )
             df_out = pd.DataFrame(rows)
 
+            # Display results in two sub-tabs: Sales-level rollup and raw Operations detail
             sales_tab, ops_tab = st.tabs(["Sales view", "Operations view"])
 
             with sales_tab:
@@ -718,6 +779,8 @@ with tab_single:
                         ]
                     st.dataframe(df_sales_summary_sorted[display_cols])
 
+                    # If quoted hours were provided, show a side-by-side bar chart
+                    # comparing model estimates vs the user's manually quoted hours
                     if has_quoted_hours:
                         df_chart = df_sales_summary_sorted[
                             df_sales_summary_sorted["Role"] != "TOTAL"
@@ -749,7 +812,9 @@ with tab_single:
                 st.subheader("Per-operation predictions")
                 st.dataframe(df_out)
 
-            # Export single quote results
+            # ── Export single quote results as CSV ──
+            # Combines operation-level, bucket-level, and total-level predictions
+            # into a single downloadable CSV file.
             st.markdown("---")
             export_rows = []
             for op, op_pred in pred.ops.items():
@@ -799,7 +864,11 @@ with tab_single:
             )
 
 
-# Batch Quotes tab
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6: Batch Quotes — upload a CSV/Excel file with multiple projects and
+# run predictions on all rows at once. The output DataFrame includes per-op
+# predictions, Sales bucket rollups, and project totals as additional columns.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_batch:
     st.header("Batch estimation via CSV or Excel")
 
@@ -819,6 +888,7 @@ with tab_batch:
             f"`{', '.join(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES)}`"
         )
 
+        # Parse the uploaded file (CSV or multi-sheet Excel)
         uploaded = st.file_uploader(
             "Upload quote file (CSV or Excel)",
             type=["csv", "xlsx", "xls"],
@@ -838,7 +908,8 @@ with tab_batch:
             st.subheader("Input preview")
             st.dataframe(df_in.head())
 
-            # Fill missing numeric columns with 0 and missing categorical with defaults
+            # Fill any missing feature columns with sensible defaults so the user
+            # doesn't need every single column in their upload file
             _cat_defaults = {
                 "industry_segment": "General Industry",
                 "system_category": "Other",
@@ -871,7 +942,17 @@ with tab_batch:
                     )
 
 
-# Admin tab: dataset upload + master merge + retrain
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 7: Admin — upload training data, merge into master dataset, and retrain.
+# The pipeline:
+#   1. User uploads an Excel file with project hours data.
+#   2. App applies feature engineering (bool normalization, index computation, etc.).
+#   3. Filters to rows with at least one non-zero actual-hours column.
+#   4. Merges new rows into the master parquet file (dedup by project_id).
+#   5. Trains all 12 operation models with the updated master dataset.
+#   6. Saves metrics to CSV and increments the model version.
+# Also provides a "Reset" button to wipe all data and models.
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_admin:
     st.header("Admin: Upload dataset and train models")
 
@@ -894,6 +975,7 @@ with tab_admin:
         st.subheader("Dataset preview")
         st.dataframe(df_raw.head())
 
+        # Validate that the upload has the minimum required columns before proceeding
         missing = [c for c in REQUIRED_TRAINING_COLS if c not in df_raw.columns]
         if missing:
             st.error(f"Missing required columns: {missing}")
@@ -902,10 +984,11 @@ with tab_admin:
                 with st.spinner("Processing upload and training models..."):
                     rows_raw = len(df_raw)
 
-                    # Apply training feature engineering to the new upload
+                    # Step 1: Apply feature engineering (filter to actuals, normalize booleans,
+                    # compute indices, derive log cost)
                     df_train = engineer_features_for_training(df_raw)
 
-                    # Keep only rows that have at least one non-zero actual-hours value
+                    # Step 2: Keep only rows that have at least one non-zero actual-hours value
                     targets_present = [t for t in TARGETS if t in df_train.columns]
                     if targets_present:
                         hours_mat = (
@@ -918,7 +1001,7 @@ with tab_admin:
 
                     rows_train = len(df_train)
 
-                    # If nothing is trainable, log and leave master/models unchanged
+                    # Step 3: If no trainable rows remain, log the upload but don't touch models
                     if rows_train == 0:
                         if os.path.exists(MASTER_DATA_PATH):
                             df_master_existing = pd.read_parquet(MASTER_DATA_PATH)
@@ -947,6 +1030,9 @@ with tab_admin:
                             "Master dataset and models were left unchanged."
                         )
                     else:
+                        # Step 4: Merge new training rows into the master parquet file.
+                        # If the master already exists, concatenate and deduplicate by project_id
+                        # (keeping the latest version of each project).
                         os.makedirs(os.path.dirname(MASTER_DATA_PATH), exist_ok=True)
 
                         if os.path.exists(MASTER_DATA_PATH):
@@ -968,6 +1054,11 @@ with tab_admin:
                         df_master_new.to_parquet(MASTER_DATA_PATH, index=False)
                         rows_master_total = len(df_master_new)
 
+                        # Step 5: Log the upload, then retrain all 12 operation models.
+                        # _next_model_version() increments the version counter (v1 -> v2 -> ...)
+                        # so old model files are preserved on disk for potential rollback.
+
+                        # Log this upload's row counts for the upload history table
                         upload_info = {
                             "rows_raw": rows_raw,
                             "rows_train": rows_train,
@@ -984,6 +1075,7 @@ with tab_admin:
                             df_log_new = log_row
                         df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
 
+                        # Train a CatBoost CQR model for each of the 12 operations
                         new_version = _next_model_version()
                         metrics_all = []
                         for target in TARGETS:
@@ -996,6 +1088,7 @@ with tab_admin:
                             if m:
                                 metrics_all.append(m)
 
+                        # Step 6: Save training metrics and notify the user
                         if metrics_all:
                             metrics_df = pd.DataFrame(metrics_all)
                             os.makedirs("models", exist_ok=True)
@@ -1029,6 +1122,9 @@ with tab_admin:
     else:
         st.info("Upload your project dataset (Excel) to enable training.")
 
+    # ── Reset section ──
+    # Requires the user to check a confirmation checkbox before the reset button is enabled.
+    # Deletes all uploaded data, trained models, and version files.
     st.markdown("---")
     st.subheader("Reset app state")
 

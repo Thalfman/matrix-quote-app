@@ -1,5 +1,7 @@
 # core/schemas.py
-# Pydantic models for structured inputs/outputs.
+# Pydantic models for structured inputs and outputs.
+# QuoteInput defines what the user provides; OpPrediction / SalesBucketPrediction /
+# QuotePrediction define what the model returns.
 
 from typing import Dict, Optional
 
@@ -11,6 +13,7 @@ class QuoteInput(BaseModel):
 
     project_id: Optional[str] = None
 
+    # Categorical identifiers
     industry_segment: str
     system_category: str
     automation_level: str
@@ -18,6 +21,7 @@ class QuoteInput(BaseModel):
     hmi_family: str
     vision_type: str
 
+    # Mechanical / physical specifications
     stations_count: float = 0
     robot_count: float = 0
     fixture_sets: float = 0
@@ -28,6 +32,8 @@ class QuoteInput(BaseModel):
     weldment_perimeter_ft: float = 0
     fence_length_ft: float = 0
     conveyor_length_ft: float = 0
+
+    # Product and process characteristics (subjective scores 1-5)
     product_familiarity_score: float = 0
     product_rigidity: float = 0
     is_product_deformable: int = 0
@@ -36,16 +42,22 @@ class QuoteInput(BaseModel):
     has_tricky_packaging: int = 0
     process_uncertainty_score: float = 0
     changeover_time_min: float = 0
+
+    # Controls and electrical
     safety_devices_count: float = 0
+    vision_systems_count: float = 0
+    panel_count: float = 0
+    drive_count: float = 0
+
+    # Project scope flags and scores
     custom_pct: float = 0
     duplicate: int = 0
     has_controls: int = 1
     has_robotics: int = 1
     Retrofit: int = 0
     complexity_score_1_5: float = 3
-    vision_systems_count: float = 0
-    panel_count: float = 0
-    drive_count: float = 0
+
+    # Derived features (auto-computed by prepare_quote_features; defaults here are placeholders)
     stations_robot_index: float = 0
     mech_complexity_index: float = 0
     controls_complexity_index: float = 0

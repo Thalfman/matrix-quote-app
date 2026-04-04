@@ -1,23 +1,29 @@
 # core/config.py
-# Central place for model targets and feature lists.
+# Central configuration for model targets, feature lists, and confidence levels.
+# This file is the single source of truth for what the models predict and which
+# features they use. Change these lists to add new operations or features.
 
-# Columns containing actual hours per operation.
+# ── Model targets ──
+# Each entry is a column in the training dataset containing actual logged hours
+# for one engineering operation. The prefix (e.g. "me10", "ee20") is the internal
+# department code; the model trains one CatBoost regressor per target.
 TARGETS = [
-    "me10_actual_hours",
-    "me15_actual_hours",
-    "me230_actual_hours",
-    "ee20_actual_hours",
-    "rb30_actual_hours",
-    "cp50_actual_hours",
-    "bld100_actual_hours",
-    "shp150_actual_hours",
-    "inst160_actual_hours",
-    "trv180_actual_hours",
-    "doc190_actual_hours",
-    "pm200_actual_hours",
+    "me10_actual_hours",    # Mechanical engineering (design)
+    "me15_actual_hours",    # Mechanical engineering (detailing)
+    "me230_actual_hours",   # Mechanical engineering (other)
+    "ee20_actual_hours",    # Electrical engineering
+    "rb30_actual_hours",    # Robotics programming
+    "cp50_actual_hours",    # Controls programming
+    "bld100_actual_hours",  # Build / assembly
+    "shp150_actual_hours",  # Shipping
+    "inst160_actual_hours", # Installation
+    "trv180_actual_hours",  # Travel
+    "doc190_actual_hours",  # Documentation
+    "pm200_actual_hours",   # Project management
 ]
 
-# Fixed Sales buckets used to roll up operation-level predictions for a quote.
+# ── Sales buckets ──
+# Operations are rolled up into these higher-level categories for the Sales team.
 SALES_BUCKETS = [
     "ME",
     "EE",
@@ -30,9 +36,8 @@ SALES_BUCKETS = [
     "Travel",
 ]
 
-# Mapping of operation identifiers (as used in TARGETS, without the
-# ``_actual_hours`` suffix) to a single Sales bucket. Each operation must map to
-# exactly one bucket; update this mapping if new operations are introduced.
+# Maps each operation prefix to its parent Sales bucket. Multiple operations can
+# roll up into the same bucket (e.g. me10, me15, me230 all -> "ME").
 SALES_BUCKET_MAP = {
     "me10": "ME",
     "me15": "ME",
@@ -57,9 +62,11 @@ TOL_MIN_TOTAL_HOURS = 10.0
 CONFIDENCE_LEVELS = [0.80, 0.90, 0.95]
 DEFAULT_CONFIDENCE = 0.90
 
-# Numeric features that should be available (or reasonably estimable) at quote time.
-# These are the only numeric inputs the quote-time models are allowed to use.
+# ── Quote-time features ──
+# These are the only features the models are allowed to see. They must all be
+# known (or estimable) at the time a quote is being prepared — no actuals allowed.
 QUOTE_NUM_FEATURES = [
+    # Raw project specifications (entered by the user)
     "stations_count",
     "robot_count",
     "fixture_sets",
@@ -88,10 +95,12 @@ QUOTE_NUM_FEATURES = [
     "vision_systems_count",
     "panel_count",
     "drive_count",
+    # Derived composite indices (auto-computed by _compute_indices_inplace in features.py)
     "stations_robot_index",
     "mech_complexity_index",
     "controls_complexity_index",
     "physical_scale_index",
+    # Log-transformed materials cost (derived from quoted_materials_cost)
     "log_quoted_materials_cost",
 ]
 

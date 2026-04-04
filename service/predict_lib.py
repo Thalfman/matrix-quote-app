@@ -1,6 +1,10 @@
 """
 service/predict_lib.py
 Prediction helpers for single and batch quotes with calibrated intervals.
+
+This is the orchestration layer between the Streamlit UI and the core ML models.
+It loads models (via the cached loader), runs inference for all 12 operations,
+and rolls up the per-operation results into Sales buckets and project totals.
 """
 
 from typing import Dict
@@ -27,6 +31,9 @@ from core.schemas import (
 )
 
 
+# Convert a Pydantic QuoteInput object into a one-row DataFrame ready for prediction.
+# Extracts only the columns the model expects and runs the same feature transforms
+# (bool normalization, index computation, etc.) used during training.
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     """Convert QuoteInput into a one-row DataFrame with the expected columns."""
     data = q.model_dump()
@@ -37,6 +44,7 @@ def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     return df
 
 
+# Guard that ensures the requested confidence level is one the models were trained with.
 def _validate_confidence(confidence_level: float) -> float:
     if confidence_level not in CONFIDENCE_LEVELS:
         raise ValueError(
@@ -46,6 +54,9 @@ def _validate_confidence(confidence_level: float) -> float:
     return confidence_level
 
 
+# ── Single-project prediction ──
+# Loads all 12 operation models, runs inference, then aggregates results into
+# Sales buckets (ME, EE, PM, etc.) and a project total.
 def predict_quote(
     q: QuoteInput, confidence_level: float = DEFAULT_CONFIDENCE
 ) -> QuotePrediction:
@@ -57,20 +68,25 @@ def predict_quote(
     df = _quote_to_df(q)
 
     ops: Dict[str, OpPrediction] = {}
+    # Accumulators for summing operation predictions into Sales buckets
     bucket_totals = {
         bucket: {"estimate": 0.0, "lo": 0.0, "hi": 0.0} for bucket in SALES_BUCKETS
     }
     total_estimate = total_lo = total_hi = 0.0
 
+    # Loop over all 12 operations (e.g. me10_actual_hours, ee20_actual_hours, ...)
+    # and run each operation's dedicated CatBoost CQR model
     for target in TARGETS:
         model_obj = load_model_cached(target)
         preds = predict_with_interval(model_obj, df, confidence_level)
 
+        # Extract scalar predictions from the single-row result arrays
         estimate = float(preds["estimate"][0])
         lo = float(preds["lo"][0])
         hi = float(preds["hi"][0])
         plus_minus = float(preds["plus_minus"][0])
 
+        # Store per-operation result (op_name strips the _actual_hours suffix)
         op_name = target.replace("_actual_hours", "")
         ops[op_name] = OpPrediction(
             estimate=estimate,
@@ -80,16 +96,22 @@ def predict_quote(
             confidence=confidence_level,
         )
 
+        # Accumulate this operation's prediction into its parent Sales bucket
+        # (e.g. me10 -> "ME", rb30 -> "Robot")
         bucket = SALES_BUCKET_MAP.get(op_name)
         if bucket in bucket_totals:
             bucket_totals[bucket]["estimate"] += estimate
             bucket_totals[bucket]["lo"] += lo
             bucket_totals[bucket]["hi"] += hi
 
+        # Accumulate into project-level totals
         total_estimate += estimate
         total_lo += lo
         total_hi += hi
 
+    # Convert bucket accumulators into SalesBucketPrediction objects.
+    # Note: summing lo/hi across operations is an approximation; the CQR coverage
+    # guarantee only holds at the individual operation level, not for aggregated totals.
     sales_buckets: Dict[str, SalesBucketPrediction] = {}
     for bucket in SALES_BUCKETS:
         totals = bucket_totals.get(bucket, {"estimate": 0.0, "lo": 0.0, "hi": 0.0})
@@ -117,6 +139,10 @@ def predict_quote(
     )
 
 
+# ── Batch prediction (vectorized) ──
+# Same logic as predict_quote but operates on a full DataFrame at once.
+# Each model predicts on all rows simultaneously (vectorized via CatBoost),
+# which is much faster than calling predict_quote row-by-row.
 def predict_quotes_df(
     df_in: pd.DataFrame, confidence_level: float = DEFAULT_CONFIDENCE
 ) -> pd.DataFrame:
@@ -128,15 +154,18 @@ def predict_quotes_df(
     df = prepare_quote_features(df_in)
     df["confidence_level"] = confidence_level
 
+    # Initialize project-level total accumulators (one value per row)
     df["total_estimate"] = 0.0
     df["total_lo"] = 0.0
     df["total_hi"] = 0.0
 
+    # Sales bucket accumulators — numpy arrays for vectorized summation across operations
     bucket_totals = {
         bucket: {"estimate": np.zeros(len(df)), "lo": np.zeros(len(df)), "hi": np.zeros(len(df))}
         for bucket in SALES_BUCKETS
     }
 
+    # Run each of the 12 operation models and write per-operation columns into the DataFrame
     for target in TARGETS:
         bundle = load_model_cached(target)
         preds = predict_with_interval(bundle, df, confidence_level)
@@ -147,16 +176,19 @@ def predict_quotes_df(
         df[f"{op_name}_hi"] = preds["hi"]
         df[f"{op_name}_plus_minus"] = preds["plus_minus"]
 
+        # Accumulate into the parent Sales bucket arrays
         bucket = SALES_BUCKET_MAP.get(op_name)
         if bucket in bucket_totals:
             bucket_totals[bucket]["estimate"] += preds["estimate"]
             bucket_totals[bucket]["lo"] += preds["lo"]
             bucket_totals[bucket]["hi"] += preds["hi"]
 
+        # Accumulate into project-level totals
         df["total_estimate"] += preds["estimate"]
         df["total_lo"] += preds["lo"]
         df["total_hi"] += preds["hi"]
 
+    # Write Sales bucket summary columns into the output DataFrame
     for bucket, totals in bucket_totals.items():
         plus_minus = np.maximum(
             totals["estimate"] - totals["lo"], totals["hi"] - totals["estimate"]
@@ -166,6 +198,7 @@ def predict_quotes_df(
         df[f"{bucket}_hi"] = totals["hi"]
         df[f"{bucket}_plus_minus"] = plus_minus
 
+    # Compute project-level plus_minus (the larger side of the total interval)
     df["total_plus_minus"] = np.maximum(
         df["total_estimate"] - df["total_lo"], df["total_hi"] - df["total_estimate"]
     )
