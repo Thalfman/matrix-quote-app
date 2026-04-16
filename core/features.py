@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 
-from .config import QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES
+from .config import QUOTE_NUM_FEATURES, QUOTE_CAT_FEATURES, TARGETS
 
 # Columns that may be stored as "yes/no/true/false/0/1" but we want 0/1 ints.
 _BOOL_STR_COLS = [
@@ -28,6 +28,141 @@ def _to_bool01(series: pd.Series) -> pd.Series:
         .fillna(0)
         .astype(int)
     )
+
+
+def validate_training_data(df: pd.DataFrame) -> dict:
+    """
+    Run data-quality checks on the raw upload before merging/training.
+
+    Returns a dict with:
+        warnings : list[str]  -- non-blocking issues
+        errors   : list[str]  -- blocking issues (training should not proceed)
+        stats    : dict       -- summary numbers
+    """
+    warnings: list[str] = []
+    errors: list[str] = []
+    stats: dict = {"row_count": len(df)}
+
+    # --- Duplicate project_ids ---
+    dup_count = 0
+    if "project_id" in df.columns:
+        dup_count = int(df["project_id"].duplicated().sum())
+        if dup_count > 0:
+            warnings.append(
+                f"{dup_count} duplicate project_id(s) found in the upload. "
+                "Duplicates will be resolved during merge (last occurrence kept)."
+            )
+    stats["duplicate_project_ids"] = dup_count
+
+    # --- Identify target columns present in the upload ---
+    targets_present = [t for t in TARGETS if t in df.columns]
+
+    # --- Negative hours (blocking) ---
+    neg_rows = 0
+    if targets_present:
+        hours = df[targets_present].apply(pd.to_numeric, errors="coerce")
+        neg_mask = hours.lt(0).any(axis=1)
+        neg_rows = int(neg_mask.sum())
+        if neg_rows > 0:
+            errors.append(
+                f"{neg_rows} row(s) contain negative hours in actual-hours columns. "
+                "Negative hours are invalid -- please correct the source data."
+            )
+    stats["rows_with_negative_hours"] = neg_rows
+
+    # --- Zero hours across all operations ---
+    zero_rows = 0
+    if targets_present:
+        hours = df[targets_present].apply(pd.to_numeric, errors="coerce").fillna(0)
+        zero_mask = hours.eq(0).all(axis=1)
+        zero_rows = int(zero_mask.sum())
+    stats["rows_with_all_zero_hours"] = zero_rows
+
+    # --- Extreme outlier hours (> 10,000 for any single operation) ---
+    if targets_present:
+        hours = df[targets_present].apply(pd.to_numeric, errors="coerce")
+        outlier_mask = hours.gt(10_000).any(axis=1)
+        outlier_count = int(outlier_mask.sum())
+        if outlier_count > 0:
+            warnings.append(
+                f"{outlier_count} row(s) have an operation with > 10,000 hours. "
+                "These are likely data-entry errors."
+            )
+
+    # --- Quote-time numeric feature coverage ---
+    present_num = [c for c in QUOTE_NUM_FEATURES if c in df.columns]
+    if len(present_num) < 3:
+        warnings.append(
+            f"Only {len(present_num)} of {len(QUOTE_NUM_FEATURES)} quote-time "
+            "numeric features found. Models trained on this data will be low quality."
+        )
+
+    return {"warnings": warnings, "errors": errors, "stats": stats}
+
+
+def validate_batch_input(df: pd.DataFrame) -> dict:
+    """
+    Run data-quality checks on a batch quote upload before prediction.
+
+    Returns a dict with:
+        warnings : list[str]  -- non-blocking issues (batch never blocks)
+        errors   : list[str]  -- always empty for batch (lenient mode)
+        stats    : dict       -- summary numbers
+    """
+    warnings: list[str] = []
+    errors: list[str] = []
+    total_rows = len(df)
+    rows_with_issues = set()
+
+    # --- Non-numeric values in numeric columns ---
+    bad_numeric_cols: list[str] = []
+    total_bad_numeric = 0
+    for col in QUOTE_NUM_FEATURES:
+        if col not in df.columns:
+            continue
+        original = df[col]
+        coerced = pd.to_numeric(original, errors="coerce")
+        # Values that were not already NaN but became NaN after coercion
+        became_nan = coerced.isna() & original.notna()
+        count = int(became_nan.sum())
+        if count > 0:
+            bad_numeric_cols.append(f"{col} ({count})")
+            total_bad_numeric += count
+            rows_with_issues.update(df.index[became_nan].tolist())
+
+    if bad_numeric_cols:
+        warnings.append(
+            f"{total_bad_numeric} non-numeric value(s) found in numeric columns "
+            f"and will be coerced to NaN: {', '.join(bad_numeric_cols)}."
+        )
+
+    # --- Empty/null categorical values ---
+    bad_cat_cols: list[str] = []
+    total_bad_cat = 0
+    for col in QUOTE_CAT_FEATURES:
+        if col not in df.columns:
+            continue
+        is_empty = df[col].isna() | (df[col].astype(str).str.strip() == "")
+        count = int(is_empty.sum())
+        if count > 0:
+            bad_cat_cols.append(f"{col} ({count})")
+            total_bad_cat += count
+            rows_with_issues.update(df.index[is_empty].tolist())
+
+    if bad_cat_cols:
+        warnings.append(
+            f"{total_bad_cat} empty/null categorical value(s) found: "
+            f"{', '.join(bad_cat_cols)}."
+        )
+
+    stats = {
+        "row_count": total_rows,
+        "rows_with_issues": len(rows_with_issues),
+        "non_numeric_values": total_bad_numeric,
+        "empty_categorical_values": total_bad_cat,
+    }
+
+    return {"warnings": warnings, "errors": errors, "stats": stats}
 
 
 def _compute_indices_inplace(df: pd.DataFrame) -> None:

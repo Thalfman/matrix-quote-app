@@ -1,6 +1,7 @@
 # service/predict_lib.py
 # Small library that exposes prediction functions for single and batch inputs.
 
+from collections import defaultdict
 from typing import Dict
 
 import pandas as pd
@@ -148,5 +149,20 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
         df["total_p50"] += p50_arr
         df["total_p10"] += p10_arr
         df["total_p90"] += p90_arr
+
+    # --- Sales bucket rollup ---
+    # Build reverse map: bucket -> list of op_names that were predicted
+    bucket_ops: Dict[str, list] = defaultdict(list)
+    for op_name, bucket in SALES_BUCKET_MAP.items():
+        if f"{op_name}_p50" in df.columns:
+            bucket_ops[bucket].append(op_name)
+
+    for bucket in SALES_BUCKETS:
+        ops_in_bucket = bucket_ops.get(bucket)
+        if not ops_in_bucket:
+            continue
+        for quantile in ("p50", "p10", "p90"):
+            col_names = [f"{op}_{quantile}" for op in ops_in_bucket]
+            df[f"{bucket}_{quantile}"] = df[col_names].sum(axis=1)
 
     return df
