@@ -22,7 +22,7 @@ from core.config import (
     SALES_BUCKETS,
 )
 from core.schemas import QuoteInput
-from core.features import engineer_features_for_training
+from core.features import engineer_features_for_training, validate_training_data
 from core.models import train_one_op, load_model
 from service.predict_lib import predict_quote, predict_quotes_df
 
@@ -818,132 +818,154 @@ with tab_admin:
             st.error(f"Missing required columns: {missing}")
         else:
             if st.button("Merge into master & train models"):
-                with st.spinner("Processing upload and training models..."):
-                    rows_raw = len(df_raw)
+                # -- Data quality validation (runs before merge/train) --
+                validation = validate_training_data(df_raw)
+                with st.expander("Data quality report", expanded=True):
+                    st.markdown(
+                        f"**Rows:** {validation['stats']['row_count']}  |  "
+                        f"**Duplicate project_ids:** {validation['stats']['duplicate_project_ids']}  |  "
+                        f"**Rows with negative hours:** {validation['stats']['rows_with_negative_hours']}  |  "
+                        f"**Rows with all-zero hours:** {validation['stats']['rows_with_all_zero_hours']}"
+                    )
+                    for w in validation["warnings"]:
+                        st.warning(w)
+                    for e in validation["errors"]:
+                        st.error(e)
+                    if not validation["warnings"] and not validation["errors"]:
+                        st.success("No issues found.")
 
-                    # Apply training feature engineering to the new upload
-                    df_train = engineer_features_for_training(df_raw)
+                if validation["errors"]:
+                    st.error(
+                        "Training aborted due to data quality errors. "
+                        "Please fix the issues above and re-upload."
+                    )
+                else:
+                    with st.spinner("Processing upload and training models..."):
+                        rows_raw = len(df_raw)
 
-                    # Keep only rows that have at least one non-zero actual-hours value
-                    targets_present = [t for t in TARGETS if t in df_train.columns]
-                    if targets_present:
-                        hours_mat = (
-                            df_train[targets_present]
-                            .apply(pd.to_numeric, errors="coerce")
-                            .fillna(0)
-                        )
-                        has_any_hours = hours_mat.gt(0).any(axis=1)
-                        df_train = df_train[has_any_hours]
+                        # Apply training feature engineering to the new upload
+                        df_train = engineer_features_for_training(df_raw)
 
-                    rows_train = len(df_train)
-
-                    # If nothing is trainable, log and leave master/models unchanged
-                    if rows_train == 0:
-                        if os.path.exists(MASTER_DATA_PATH):
-                            df_master_existing = pd.read_parquet(MASTER_DATA_PATH)
-                            rows_master_total = len(df_master_existing)
-                        else:
-                            rows_master_total = 0
-
-                        upload_info = {
-                            "rows_raw": rows_raw,
-                            "rows_train": rows_train,
-                            "rows_master_total": rows_master_total,
-                        }
-                        log_row = pd.DataFrame([upload_info])
-                        os.makedirs(os.path.dirname(UPLOADS_LOG_PATH), exist_ok=True)
-                        if os.path.exists(UPLOADS_LOG_PATH):
-                            df_log_old = pd.read_csv(UPLOADS_LOG_PATH)
-                            df_log_new = pd.concat(
-                                [df_log_old, log_row], ignore_index=True
+                        # Keep only rows that have at least one non-zero actual-hours value
+                        targets_present = [t for t in TARGETS if t in df_train.columns]
+                        if targets_present:
+                            hours_mat = (
+                                df_train[targets_present]
+                                .apply(pd.to_numeric, errors="coerce")
+                                .fillna(0)
                             )
-                        else:
-                            df_log_new = log_row
-                        df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
+                            has_any_hours = hours_mat.gt(0).any(axis=1)
+                            df_train = df_train[has_any_hours]
 
-                        st.warning(
-                            "Upload contained no rows with non-zero actual hours. "
-                            "Master dataset and models were left unchanged."
-                        )
-                    else:
-                        os.makedirs(os.path.dirname(MASTER_DATA_PATH), exist_ok=True)
+                        rows_train = len(df_train)
 
-                        if os.path.exists(MASTER_DATA_PATH):
-                            df_master_old = pd.read_parquet(MASTER_DATA_PATH)
-                            df_all = pd.concat(
-                                [df_master_old, df_train], ignore_index=True
-                            )
-                        else:
-                            df_all = df_train
+                        # If nothing is trainable, log and leave master/models unchanged
+                        if rows_train == 0:
+                            if os.path.exists(MASTER_DATA_PATH):
+                                df_master_existing = pd.read_parquet(MASTER_DATA_PATH)
+                                rows_master_total = len(df_master_existing)
+                            else:
+                                rows_master_total = 0
 
-                        if "project_id" in df_all.columns:
-                            df_all = df_all.sort_index()
-                            df_master_new = df_all.drop_duplicates(
-                                subset=["project_id"], keep="last"
-                            )
-                        else:
-                            df_master_new = df_all
+                            upload_info = {
+                                "rows_raw": rows_raw,
+                                "rows_train": rows_train,
+                                "rows_master_total": rows_master_total,
+                            }
+                            log_row = pd.DataFrame([upload_info])
+                            os.makedirs(os.path.dirname(UPLOADS_LOG_PATH), exist_ok=True)
+                            if os.path.exists(UPLOADS_LOG_PATH):
+                                df_log_old = pd.read_csv(UPLOADS_LOG_PATH)
+                                df_log_new = pd.concat(
+                                    [df_log_old, log_row], ignore_index=True
+                                )
+                            else:
+                                df_log_new = log_row
+                            df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
 
-                        df_master_new.to_parquet(MASTER_DATA_PATH, index=False)
-                        rows_master_total = len(df_master_new)
-
-                        upload_info = {
-                            "rows_raw": rows_raw,
-                            "rows_train": rows_train,
-                            "rows_master_total": rows_master_total,
-                        }
-                        log_row = pd.DataFrame([upload_info])
-                        os.makedirs(os.path.dirname(UPLOADS_LOG_PATH), exist_ok=True)
-                        if os.path.exists(UPLOADS_LOG_PATH):
-                            df_log_old = pd.read_csv(UPLOADS_LOG_PATH)
-                            df_log_new = pd.concat(
-                                [df_log_old, log_row], ignore_index=True
-                            )
-                        else:
-                            df_log_new = log_row
-                        df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
-
-                        metrics_all = []
-                        for target in TARGETS:
-                            m = train_one_op(
-                                df_master_new,
-                                target,
-                                models_dir="models",
-                                version="v1",
-                            )
-                            if m:
-                                metrics_all.append(m)
-
-                        if metrics_all:
-                            metrics_df = pd.DataFrame(metrics_all)
-                            os.makedirs("models", exist_ok=True)
-                            metrics_df.to_csv(METRICS_PATH, index=False)
-                            st.session_state["models_ready"] = True
-
-                            st.success(
-                                "Master dataset updated and models trained. "
-                                "Quoting tabs now use the latest models."
-                            )
-                            st.subheader("Model metrics")
-                            st.dataframe(metrics_df)
-
-                            csv_bytes = metrics_df.to_csv(index=False).encode(
-                                "utf-8"
-                            )
-                            st.download_button(
-                                label="Download metrics_summary.csv",
-                                data=csv_bytes,
-                                file_name="metrics_summary.csv",
-                                mime="text/csv",
-                            )
-
-                            # Force a rerun so other tabs see the new master/models
-                            st.rerun()
-                        else:
                             st.warning(
-                                "No models were trained (not enough data for any operation). "
-                                "Check that actual-hours columns have non-zero values."
+                                "Upload contained no rows with non-zero actual hours. "
+                                "Master dataset and models were left unchanged."
                             )
+                        else:
+                            os.makedirs(os.path.dirname(MASTER_DATA_PATH), exist_ok=True)
+
+                            if os.path.exists(MASTER_DATA_PATH):
+                                df_master_old = pd.read_parquet(MASTER_DATA_PATH)
+                                df_all = pd.concat(
+                                    [df_master_old, df_train], ignore_index=True
+                                )
+                            else:
+                                df_all = df_train
+
+                            if "project_id" in df_all.columns:
+                                df_all = df_all.sort_index()
+                                df_master_new = df_all.drop_duplicates(
+                                    subset=["project_id"], keep="last"
+                                )
+                            else:
+                                df_master_new = df_all
+
+                            df_master_new.to_parquet(MASTER_DATA_PATH, index=False)
+                            rows_master_total = len(df_master_new)
+
+                            upload_info = {
+                                "rows_raw": rows_raw,
+                                "rows_train": rows_train,
+                                "rows_master_total": rows_master_total,
+                            }
+                            log_row = pd.DataFrame([upload_info])
+                            os.makedirs(os.path.dirname(UPLOADS_LOG_PATH), exist_ok=True)
+                            if os.path.exists(UPLOADS_LOG_PATH):
+                                df_log_old = pd.read_csv(UPLOADS_LOG_PATH)
+                                df_log_new = pd.concat(
+                                    [df_log_old, log_row], ignore_index=True
+                                )
+                            else:
+                                df_log_new = log_row
+                            df_log_new.to_csv(UPLOADS_LOG_PATH, index=False)
+
+                            metrics_all = []
+                            for target in TARGETS:
+                                m = train_one_op(
+                                    df_master_new,
+                                    target,
+                                    models_dir="models",
+                                    version="v1",
+                                )
+                                if m:
+                                    metrics_all.append(m)
+
+                            if metrics_all:
+                                metrics_df = pd.DataFrame(metrics_all)
+                                os.makedirs("models", exist_ok=True)
+                                metrics_df.to_csv(METRICS_PATH, index=False)
+                                st.session_state["models_ready"] = True
+
+                                st.success(
+                                    "Master dataset updated and models trained. "
+                                    "Quoting tabs now use the latest models."
+                                )
+                                st.subheader("Model metrics")
+                                st.dataframe(metrics_df)
+
+                                csv_bytes = metrics_df.to_csv(index=False).encode(
+                                    "utf-8"
+                                )
+                                st.download_button(
+                                    label="Download metrics_summary.csv",
+                                    data=csv_bytes,
+                                    file_name="metrics_summary.csv",
+                                    mime="text/csv",
+                                )
+
+                                # Force a rerun so other tabs see the new master/models
+                                st.rerun()
+                            else:
+                                st.warning(
+                                    "No models were trained (not enough data for any operation). "
+                                    "Check that actual-hours columns have non-zero values."
+                                )
     else:
         st.info("Upload your project dataset (Excel) to enable training.")
 
