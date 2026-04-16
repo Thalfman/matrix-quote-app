@@ -302,10 +302,11 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
-                pipe = load_model(target_choice)
-                if pipe is None:
+                bundle = load_model(target_choice)
+                if bundle is None:
                     st.warning("Model file not found for this operation.")
                 else:
+                    pipe = bundle["pipeline"]
                     pre = pipe.named_steps["preprocess"]
                     model = pipe.named_steps["model"]
 

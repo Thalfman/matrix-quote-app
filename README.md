@@ -1,13 +1,13 @@
 # Matrix Quote App
 
-An internal Streamlit tool for estimating engineering hours on industrial automation projects (robotics, controls, mechanical, etc.). It trains per-operation RandomForest models from historical project data and produces hour estimates with confidence intervals for new quotes.
+An internal Streamlit tool for estimating engineering hours on industrial automation projects (robotics, controls, mechanical, etc.). It trains per-operation Gradient Boosting models from historical project data and produces hour estimates with confidence intervals for new quotes.
 
 ---
 
 ## What it does
 
 1. **Ingests** historical project data from Excel uploads and stores it as Parquet.
-2. **Trains** one RandomForest model per operation (12 total) using quote-time features only.
+2. **Trains** one Gradient Boosting model per operation (12 total) using quote-time features only.
 3. **Predicts** hours per operation and rolls them up into 9 sales buckets with low/mid/high confidence intervals.
 4. **Explains** which features drive each estimate and surfaces similar past projects.
 
@@ -68,7 +68,7 @@ matrix-quote-app/
 │   ├── config.py                     # Feature lists, targets, sales bucket mapping
 │   ├── schemas.py                    # Pydantic models (QuoteInput, QuotePrediction, etc.)
 │   ├── features.py                   # Feature engineering for training & inference
-│   └── models.py                     # RF training, prediction with tree-level intervals
+│   └── models.py                     # GBR training, prediction with quantile intervals
 ├── service/
 │   └── predict_lib.py                # Single & batch prediction orchestration
 ├── requirements.txt
@@ -106,7 +106,7 @@ All 12 `*_actual_hours` columns (`me10` through `pm200`) should be present for f
 ## Tech stack
 
 - **UI:** Streamlit, Altair
-- **ML:** scikit-learn (RandomForestRegressor), joblib
+- **ML:** scikit-learn (GradientBoostingRegressor), joblib
 - **Data:** pandas, numpy, pyarrow (Parquet), openpyxl (Excel)
 - **Validation:** Pydantic
 - **Runtime:** Python 3.11, port 8501
