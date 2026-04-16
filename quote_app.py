@@ -22,7 +22,7 @@ from core.config import (
     SALES_BUCKETS,
 )
 from core.schemas import QuoteInput
-from core.features import engineer_features_for_training, validate_training_data
+from core.features import engineer_features_for_training, validate_batch_input, validate_training_data
 from core.models import train_one_op, load_model
 from service.predict_lib import predict_quote, predict_quotes_df
 
@@ -776,6 +776,20 @@ with tab_batch:
             if missing:
                 st.error(f"Missing required columns: {missing}")
             else:
+                # -- Batch input validation --
+                validation = validate_batch_input(df_in)
+                with st.expander("Input data quality check", expanded=bool(validation["warnings"])):
+                    st.markdown(
+                        f"**Rows:** {validation['stats']['row_count']}  |  "
+                        f"**Rows with issues:** {validation['stats']['rows_with_issues']}  |  "
+                        f"**Non-numeric values:** {validation['stats']['non_numeric_values']}  |  "
+                        f"**Empty categoricals:** {validation['stats']['empty_categorical_values']}"
+                    )
+                    for w in validation["warnings"]:
+                        st.warning(w)
+                    if not validation["warnings"]:
+                        st.success("No issues found.")
+
                 if st.button("Run predictions on all rows"):
                     df_out = predict_quotes_df(df_in)
                     st.subheader("Output preview")

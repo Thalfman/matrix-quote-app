@@ -100,6 +100,71 @@ def validate_training_data(df: pd.DataFrame) -> dict:
     return {"warnings": warnings, "errors": errors, "stats": stats}
 
 
+def validate_batch_input(df: pd.DataFrame) -> dict:
+    """
+    Run data-quality checks on a batch quote upload before prediction.
+
+    Returns a dict with:
+        warnings : list[str]  -- non-blocking issues (batch never blocks)
+        errors   : list[str]  -- always empty for batch (lenient mode)
+        stats    : dict       -- summary numbers
+    """
+    warnings: list[str] = []
+    errors: list[str] = []
+    total_rows = len(df)
+    rows_with_issues = set()
+
+    # --- Non-numeric values in numeric columns ---
+    bad_numeric_cols: list[str] = []
+    total_bad_numeric = 0
+    for col in QUOTE_NUM_FEATURES:
+        if col not in df.columns:
+            continue
+        original = df[col]
+        coerced = pd.to_numeric(original, errors="coerce")
+        # Values that were not already NaN but became NaN after coercion
+        became_nan = coerced.isna() & original.notna()
+        count = int(became_nan.sum())
+        if count > 0:
+            bad_numeric_cols.append(f"{col} ({count})")
+            total_bad_numeric += count
+            rows_with_issues.update(df.index[became_nan].tolist())
+
+    if bad_numeric_cols:
+        warnings.append(
+            f"{total_bad_numeric} non-numeric value(s) found in numeric columns "
+            f"and will be coerced to NaN: {', '.join(bad_numeric_cols)}."
+        )
+
+    # --- Empty/null categorical values ---
+    bad_cat_cols: list[str] = []
+    total_bad_cat = 0
+    for col in QUOTE_CAT_FEATURES:
+        if col not in df.columns:
+            continue
+        is_empty = df[col].isna() | (df[col].astype(str).str.strip() == "")
+        count = int(is_empty.sum())
+        if count > 0:
+            bad_cat_cols.append(f"{col} ({count})")
+            total_bad_cat += count
+            rows_with_issues.update(df.index[is_empty].tolist())
+
+    if bad_cat_cols:
+        warnings.append(
+            f"{total_bad_cat} empty/null categorical value(s) found: "
+            f"{', '.join(bad_cat_cols)}."
+        )
+
+    stats = {
+        "row_count": total_rows,
+        "rows_with_issues": len(rows_with_issues),
+        "non_numeric_values": total_bad_numeric,
+        "empty_categorical_values": total_bad_cat,
+    }
+
+    return {"warnings": warnings, "errors": errors, "stats": stats}
+
+
 def _compute_indices_inplace(df: pd.DataFrame) -> None:
     """
     Compute composite indices he already uses (station/robot, mech, controls, physical).
