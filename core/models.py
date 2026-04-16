@@ -112,23 +112,33 @@ def train_one_op(
 
 def predict_with_interval(bundle: dict, X_df: pd.DataFrame):
     """
-    Use GradientBoosting quantile models for prediction intervals:
-    - p50: central estimate from the main (squared_error) model
-    - p10/p90: lower/upper bounds from dedicated quantile models
-    - std: approximate std derived from the 10th-90th percentile spread
+    Predict p50/p10/p90/std, supporting two saved bundle shapes:
+
+    - Legacy: ``{"pipeline", "q10", "q90"}`` produced by the local
+      ``train_one_op`` — a main GBR pipeline plus two quantile GBRs.
+    - CQR: ``{"preprocessor", "model_mid", "model_lo", "model_hi",
+      "qhat", "alpha", "meta"}`` — a conformalized-quantile-regression
+      bundle. ``qhat`` shifts the raw quantile predictions to produce
+      calibrated prediction intervals.
     """
-    pipe = bundle["pipeline"]
-    q10_model = bundle["q10"]
-    q90_model = bundle["q90"]
+    if "pipeline" in bundle:
+        pipe = bundle["pipeline"]
+        pre = pipe.named_steps["preprocess"]
+        X_proc = pre.transform(X_df)
+        p50 = pipe.named_steps["model"].predict(X_proc)
+        p10 = bundle["q10"].predict(X_proc)
+        p90 = bundle["q90"].predict(X_proc)
+    else:
+        pre = bundle["preprocessor"]
+        X_proc = pre.transform(X_df)
+        p50 = bundle["model_mid"].predict(X_proc)
+        p10_raw = bundle["model_lo"].predict(X_proc)
+        p90_raw = bundle["model_hi"].predict(X_proc)
+        qhat = float(bundle.get("qhat") or 0.0)
+        p10 = p10_raw - qhat
+        p90 = p90_raw + qhat
 
-    pre = pipe.named_steps["preprocess"]
-    X_proc = pre.transform(X_df)
-
-    p50 = pipe.named_steps["model"].predict(X_proc)
-    p10 = q10_model.predict(X_proc)
-    p90 = q90_model.predict(X_proc)
     std = (p90 - p10) / 2.56
-
     return p50, p10, p90, std
 
 
