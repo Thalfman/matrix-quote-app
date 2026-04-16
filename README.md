@@ -92,7 +92,7 @@ Training data must be uploaded as an Excel file (.xlsx). The following columns a
 |--------|-------------|
 | `project_id` | Unique identifier for each project |
 | `include_in_training` | Boolean — whether to use this row for model training |
-| `dataset_role` | Role of the row (e.g., `train`, `test`) |
+| `dataset_role` | Must be `actuals` for rows to be used in training |
 | `industry_segment` | Industry vertical (categorical) |
 | `system_category` | Type of automation system (categorical) |
 | `stations_count` | Number of stations in the system |
