@@ -467,7 +467,25 @@ with tab_single:
         "Estimated materials cost", min_value=0.0
         )
 
+        with st.expander("Optional: Enter quoted hours for comparison"):
+            _quoted_hours_inputs = {}
+            cols_row1 = st.columns(3)
+            for idx, bucket in enumerate(SALES_BUCKETS):
+                with cols_row1[idx % 3]:
+                    _quoted_hours_inputs[bucket] = st.number_input(
+                        f"{bucket} quoted hours",
+                        min_value=0.0,
+                        value=0.0,
+                        step=1.0,
+                        key=f"quoted_hours_{bucket}",
+                    )
+
         if st.button("Estimate hours"):
+            # Populate quoted-hours session state from the expander inputs.
+            _quoted = {
+                b: v for b, v in _quoted_hours_inputs.items() if v and v > 0
+            }
+            st.session_state["quoted_hours_by_bucket"] = _quoted
 
             log_cost = float(math.log1p(estimated_materials_cost))
 
