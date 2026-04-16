@@ -24,7 +24,7 @@ from core.schemas import (
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     """Convert QuoteInput into a one-row DataFrame with the expected columns."""
-    data = q.dict()
+    data = q.model_dump()
     cols = list(set(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES))
     row = {c: data.get(c, None) for c in cols}
     df = pd.DataFrame([row])
