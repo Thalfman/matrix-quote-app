@@ -77,6 +77,20 @@ def _load_master():
     return None
 
 
+def _get_dropdown_options(column: str, defaults: list[str]) -> list[str]:
+    """Return unique sorted values for *column* from the master dataset.
+
+    Falls back to *defaults* when the master file is missing or the column
+    is not present in the data.
+    """
+    df = _load_master()
+    if df is not None and column in df.columns:
+        values = sorted(df[column].dropna().unique().tolist())
+        if values:
+            return values
+    return defaults
+
+
 def _load_metrics():
     """Load the per-operation metrics file if it exists."""
     if os.path.exists(METRICS_PATH):
@@ -398,15 +412,30 @@ with tab_single:
     else:
         industry_segment = st.selectbox(
             "Industry segment",
-            ["Automotive", "Food & Beverage", "General Industry"],
+            _get_dropdown_options(
+                "industry_segment",
+                ["Automotive", "Food & Beverage", "General Industry"],
+            ),
         )
         system_category = st.selectbox(
             "System category",
-            ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
+            _get_dropdown_options(
+                "system_category",
+                [
+                    "Machine Tending",
+                    "End of Line Automation",
+                    "Robotic Metal Finishing",
+                    "Engineered Manufacturing Systems",
+                    "Other",
+                ],
+            ),
         )
         automation_level = st.selectbox(
             "Automation level",
-            ["Semi-Automatic", "Robotic", "Hard Automation"],
+            _get_dropdown_options(
+                "automation_level",
+                ["Semi-Automatic", "Robotic", "Hard Automation"],
+            ),
         )
         plc_family = st.text_input("PLC family", "AB Compact Logix")
         hmi_family = st.text_input("HMI family", "AB PanelView Plus")
