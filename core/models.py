@@ -124,7 +124,12 @@ def predict_with_interval(pipe: Pipeline, X_df: pd.DataFrame):
 
 def load_model(
     target: str, version: str = "v1", models_dir: str = "models"
-) -> Pipeline:
-    """Load a persisted pipeline for a given operation."""
+) -> Optional[Pipeline]:
+    """Load a persisted pipeline for a given operation.
+
+    Returns ``None`` if the model file does not exist on disk.
+    """
     model_path = os.path.join(models_dir, f"{target}_{version}.joblib")
+    if not os.path.exists(model_path):
+        return None
     return joblib.load(model_path)

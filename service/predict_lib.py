@@ -67,6 +67,8 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
 
     for target in TARGETS:
         pipe = load_model(target)
+        if pipe is None:
+            continue
         p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
 
         p50 = float(p50_arr[0])
@@ -133,6 +135,8 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
 
     for target in TARGETS:
         pipe = load_model(target)
+        if pipe is None:
+            continue
         p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
 
         op_name = target.replace("_actual_hours", "")

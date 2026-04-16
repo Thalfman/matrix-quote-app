@@ -289,28 +289,31 @@ with tab_drivers:
                 )
 
                 pipe = load_model(target_choice)
-                pre = pipe.named_steps["preprocess"]
-                model = pipe.named_steps["model"]
+                if pipe is None:
+                    st.warning("Model file not found for this operation.")
+                else:
+                    pre = pipe.named_steps["preprocess"]
+                    model = pipe.named_steps["model"]
 
-                try:
-                    feature_names = pre.get_feature_names_out()
-                except Exception:
-                    feature_names = [
-                        f"f_{i}" for i in range(len(model.feature_importances_))
-                    ]
+                    try:
+                        feature_names = pre.get_feature_names_out()
+                    except Exception:
+                        feature_names = [
+                            f"f_{i}" for i in range(len(model.feature_importances_))
+                        ]
 
-                importances = model.feature_importances_
-                fi_df = (
-                    pd.DataFrame(
-                        {"feature": feature_names, "importance": importances}
+                    importances = model.feature_importances_
+                    fi_df = (
+                        pd.DataFrame(
+                            {"feature": feature_names, "importance": importances}
+                        )
+                        .sort_values("importance", ascending=False)
+                        .reset_index(drop=True)
                     )
-                    .sort_values("importance", ascending=False)
-                    .reset_index(drop=True)
-                )
 
-                st.write("Top 15 features by importance")
-                st.dataframe(fi_df.head(15))
-                st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
+                    st.write("Top 15 features by importance")
+                    st.dataframe(fi_df.head(15))
+                    st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
 
         # Similar projects: filter-based helper
         with col_dr2:
