@@ -77,6 +77,20 @@ def _load_master():
     return None
 
 
+def _get_dropdown_options(column: str, defaults: list[str]) -> list[str]:
+    """Return unique sorted values for *column* from the master dataset.
+
+    Falls back to *defaults* when the master file is missing or the column
+    is not present in the data.
+    """
+    df = _load_master()
+    if df is not None and column in df.columns:
+        values = sorted(df[column].dropna().unique().tolist())
+        if values:
+            return values
+    return defaults
+
+
 def _load_metrics():
     """Load the per-operation metrics file if it exists."""
     if os.path.exists(METRICS_PATH):
@@ -288,29 +302,33 @@ with tab_drivers:
                     "Select operation", modeled_ops, key="drivers_op_select"
                 )
 
-                pipe = load_model(target_choice)
-                pre = pipe.named_steps["preprocess"]
-                model = pipe.named_steps["model"]
+                bundle = load_model(target_choice)
+                if bundle is None:
+                    st.warning("Model file not found for this operation.")
+                else:
+                    pipe = bundle["pipeline"]
+                    pre = pipe.named_steps["preprocess"]
+                    model = pipe.named_steps["model"]
 
-                try:
-                    feature_names = pre.get_feature_names_out()
-                except Exception:
-                    feature_names = [
-                        f"f_{i}" for i in range(len(model.feature_importances_))
-                    ]
+                    try:
+                        feature_names = pre.get_feature_names_out()
+                    except Exception:
+                        feature_names = [
+                            f"f_{i}" for i in range(len(model.feature_importances_))
+                        ]
 
-                importances = model.feature_importances_
-                fi_df = (
-                    pd.DataFrame(
-                        {"feature": feature_names, "importance": importances}
+                    importances = model.feature_importances_
+                    fi_df = (
+                        pd.DataFrame(
+                            {"feature": feature_names, "importance": importances}
+                        )
+                        .sort_values("importance", ascending=False)
+                        .reset_index(drop=True)
                     )
-                    .sort_values("importance", ascending=False)
-                    .reset_index(drop=True)
-                )
 
-                st.write("Top 15 features by importance")
-                st.dataframe(fi_df.head(15))
-                st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
+                    st.write("Top 15 features by importance")
+                    st.dataframe(fi_df.head(15))
+                    st.bar_chart(fi_df.head(15).set_index("feature")["importance"])
 
         # Similar projects: filter-based helper
         with col_dr2:
@@ -395,15 +413,30 @@ with tab_single:
     else:
         industry_segment = st.selectbox(
             "Industry segment",
-            ["Automotive", "Food & Beverage", "General Industry"],
+            _get_dropdown_options(
+                "industry_segment",
+                ["Automotive", "Food & Beverage", "General Industry"],
+            ),
         )
         system_category = st.selectbox(
             "System category",
-            ["Machine Tending", "End of Line Automation", "Robotic Metal Finishing", "Engineered Manufacturing Systems", "Other"],
+            _get_dropdown_options(
+                "system_category",
+                [
+                    "Machine Tending",
+                    "End of Line Automation",
+                    "Robotic Metal Finishing",
+                    "Engineered Manufacturing Systems",
+                    "Other",
+                ],
+            ),
         )
         automation_level = st.selectbox(
             "Automation level",
-            ["Semi-Automatic", "Robotic", "Hard Automation"],
+            _get_dropdown_options(
+                "automation_level",
+                ["Semi-Automatic", "Robotic", "Hard Automation"],
+            ),
         )
         plc_family = st.text_input("PLC family", "AB Compact Logix")
         hmi_family = st.text_input("HMI family", "AB PanelView Plus")
@@ -467,7 +500,25 @@ with tab_single:
         "Estimated materials cost", min_value=0.0
         )
 
+        with st.expander("Optional: Enter quoted hours for comparison"):
+            _quoted_hours_inputs = {}
+            cols_row1 = st.columns(3)
+            for idx, bucket in enumerate(SALES_BUCKETS):
+                with cols_row1[idx % 3]:
+                    _quoted_hours_inputs[bucket] = st.number_input(
+                        f"{bucket} quoted hours",
+                        min_value=0.0,
+                        value=0.0,
+                        step=1.0,
+                        key=f"quoted_hours_{bucket}",
+                    )
+
         if st.button("Estimate hours"):
+            # Populate quoted-hours session state from the expander inputs.
+            _quoted = {
+                b: v for b, v in _quoted_hours_inputs.items() if v and v > 0
+            }
+            st.session_state["quoted_hours_by_bucket"] = _quoted
 
             log_cost = float(math.log1p(estimated_materials_cost))
 

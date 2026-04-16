@@ -24,7 +24,7 @@ from core.schemas import (
 
 def _quote_to_df(q: QuoteInput) -> pd.DataFrame:
     """Convert QuoteInput into a one-row DataFrame with the expected columns."""
-    data = q.dict()
+    data = q.model_dump()
     cols = list(set(QUOTE_NUM_FEATURES + QUOTE_CAT_FEATURES))
     row = {c: data.get(c, None) for c in cols}
     df = pd.DataFrame([row])
@@ -67,6 +67,8 @@ def predict_quote(q: QuoteInput) -> QuotePrediction:
 
     for target in TARGETS:
         pipe = load_model(target)
+        if pipe is None:
+            continue
         p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
 
         p50 = float(p50_arr[0])
@@ -133,6 +135,8 @@ def predict_quotes_df(df_in: pd.DataFrame) -> pd.DataFrame:
 
     for target in TARGETS:
         pipe = load_model(target)
+        if pipe is None:
+            continue
         p50_arr, p10_arr, p90_arr, std_arr = predict_with_interval(pipe, df)
 
         op_name = target.replace("_actual_hours", "")
